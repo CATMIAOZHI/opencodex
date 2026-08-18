@@ -428,6 +428,43 @@ export function applyRoutedCodexToolMode(entry: RawEntry): RawEntry {
   return entry;
 }
 
+const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-pro", "deepseek-v4-flash"]);
+
+export function isDeepSeekV4Model(modelId?: string): boolean {
+  return typeof modelId === "string" && DEEPSEEK_V4_MODEL_IDS.has(modelId);
+}
+
+function deepSeekV4ModelIdFromCatalogEntry(entry: RawEntry): string | undefined {
+  const slug = typeof entry.slug === "string" ? entry.slug : "";
+  const slash = slug.indexOf("/");
+  if (slash < 0) return undefined;
+  const modelId = slug.slice(slash + 1);
+  if (isDeepSeekV4Model(modelId)) return modelId;
+  // Keep compatibility with Command Code's historical vendor-prefixed slugs.
+  const vendorPrefixedId = modelId.startsWith("deepseek-") ? modelId.slice("deepseek-".length) : "";
+  return isDeepSeekV4Model(vendorPrefixedId) ? vendorPrefixedId : undefined;
+}
+
+export function applyDeepSeekV4CodexProfile(entry: RawEntry, modelId?: string): RawEntry {
+  const resolvedModelId = modelId ?? deepSeekV4ModelIdFromCatalogEntry(entry);
+  if (!isDeepSeekV4Model(resolvedModelId)) return entry;
+
+  entry.tool_mode = "direct";
+  entry.multi_agent_version = "v2";
+  entry.use_responses_lite = false;
+  delete entry.model_messages;
+  delete entry.base_instructions;
+  entry.include_skills_usage_instructions = false;
+  entry.include_plugin_usage_instructions = false;
+  entry.include_apps_usage_instructions = false;
+  return entry;
+}
+
+export function applyDeepSeekV4CodexProfiles(entries: RawEntry[]): RawEntry[] {
+  for (const entry of entries) applyDeepSeekV4CodexProfile(entry);
+  return entries;
+}
+
 /**
  * @param v2FeatureEnabled When the native multi_agent_v2 feature is on, "default"
  *   mode stamps unpinned entries as "v2" instead of deleting the key. The native

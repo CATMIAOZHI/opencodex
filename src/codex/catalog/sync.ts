@@ -33,7 +33,7 @@ import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
 
 
-import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
+import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyDeepSeekV4CodexProfiles, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDeepSeekV4Model, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { accountBoundNativeOpenAiSlugs, accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, CODEX_NATIVE_ALIAS_CATALOG_KIND, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, isNativeAliasCatalogEntry, isUnsupportedOpenAiNativeSlug, NATIVE_OPENAI_MODELS, nativeContextLimits, observedAccountBoundNativeEntries, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry, type NativeContextLimitsInput } from "./metadata";
 import {
@@ -317,7 +317,7 @@ export function deriveEntry(
       // Native id for identity text + metadata lookups — the slug may be an encoded
       // alias (`provider/vendor-model`); the model object carries the native id.
       const modelName = model?.id ?? slug.slice(slug.indexOf("/") + 1);
-      if (typeof e.base_instructions === "string") {
+      if (typeof e.base_instructions === "string" && !isDeepSeekV4Model(modelName)) {
         // Proxy-neutral: keep the GPT-5/OpenAI disclaimer but never advertise the opencodex proxy
         // (leaking that into base_instructions is a non-first-party signature → ToS risk).
         e.base_instructions = identifyRoutedModel(e.base_instructions, modelName);
@@ -642,9 +642,9 @@ export function buildCatalogEntriesFromObservedState({
       delete entry.prefer_websockets;
     }
   }
-  return applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled, {
+  return applyDeepSeekV4CodexProfiles(applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled, {
     keepNativeChatGptOnV1,
-  });
+  }));
 }
 
 export function resetCatalogRuntimeStateForTests(): void {
@@ -1106,12 +1106,12 @@ export function mergeCatalogEntriesFromObservedState({
   // Native enable/disable runs as the LAST pass so the upstream-upgrade branch above can never
   // clobber a hide flag back to list. Bare ids disable every account clone; qualified ids disable
   // only their generated account row.
-  const versionedEntries = applyMultiAgentMode(
+  const versionedEntries = applyDeepSeekV4CodexProfiles(applyMultiAgentMode(
     applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
     multiAgentMode,
     multiAgentV2Enabled,
     { keepNativeChatGptOnV1 },
-  );
+  ));
   for (const entry of versionedEntries) {
     const kind = entry.opencodex_catalog_kind;
     if (trustedAccountBoundNativeCatalogSlug(entry) === undefined
