@@ -205,6 +205,18 @@ export interface ProviderRegistryEntry {
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
+   * Responses upstream whose schema validator requires every function tool's
+   * `parameters.required` to be present and to include every key in
+   * `parameters.properties` (OpenAI strict-mode style). Codex ships lenient
+   * schemas where optional keys are omitted from `required` — e.g.
+   * `list_threads` declares only `limit` and an empty `required` — which such an
+   * upstream rejects with `'required' is required to be supplied and to be an
+   * array including every key in properties. Missing '<key>'.` When set, the
+   * openai-responses adapter completes `required` from `properties` before
+   * payload construction. Seeded/backfilled like other fixed wire capabilities.
+   */
+  strictResponsesToolSchemas?: boolean;
+  /**
    * Registry default for the provider's `service_tier` support; see
    * `OcxProviderConfig.supportsServiceTier`. Registry-only: backfilled (never
    * overriding) at enrich/route time and deliberately NOT seeded into saved
@@ -1250,7 +1262,18 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     - 다른 대안 대신 이 방식을 선택한 이유: OpenCode Go documents sibling models on Chat or Anthropic endpoints, and an exact registry default preserves both those routes and explicit opt-out precedence.
     - 장점, 단점 및 영향: Luna reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
     */
-    modelWireDefaults: { "gpt-5.6-luna": "openai-responses" },
+    modelWireDefaults: {
+      "gpt-5.6-luna": "openai-responses",
+      // Muse Spark only accepts the Responses wire on Zen Go's /responses endpoint
+      // (verified 2026-08-27: /chat/completions returns Provider error 500 for
+      // muse-spark-1.2-contributor while the Responses shape is the documented path).
+      "muse-spark-1.2-contributor": { wire: "openai-responses", inbound: ["responses"] },
+    },
+    // Console Go's /responses validator requires full `required` coverage over
+    // `properties` on every function tool (verified 2026-08-27: Codex's lenient
+    // `list_threads`/`list_archived_threads` schemas produce 400
+    // "Missing 'limit'" until `required` is completed from `properties`).
+    strictResponsesToolSchemas: true,
     modelContextWindows: { "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW },
     modelInputModalities: { "kimi-k3": ["text", "image"] },
     modelReasoningEfforts: {
@@ -1259,6 +1282,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "kimi-k3": KIMI_CODING_K3_REASONING_EFFORTS,
       "kimi-k2.7-code": [],
       "kimi-k2.7-code-highspeed": [],
+      // Muse Spark upstream rejects `ultra` (same ladder as the command-code profile):
+      // keep the catalog off the ultra rung so the picker never offers a 500.
+      "muse-spark-1.2": ["low", "medium", "high", "xhigh", "max"],
+      "muse-spark-1.2-contributor": ["low", "medium", "high", "xhigh", "max"],
+      "muse-spark-1.1": ["low", "medium", "high", "xhigh", "max"],
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),

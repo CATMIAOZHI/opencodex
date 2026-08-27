@@ -731,6 +731,7 @@ const providerConfigSchema = z.object({
   responsesPath: z.string().min(1).optional(),
   statelessResponses: z.boolean().optional(),
   requiresAdjacentResponsesToolResults: z.boolean().optional(),
+  strictResponsesToolSchemas: z.boolean().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),

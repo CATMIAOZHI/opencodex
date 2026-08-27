@@ -341,6 +341,10 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       && registryEntry.requiresAdjacentResponsesToolResults !== undefined
       ? { requiresAdjacentResponsesToolResults: registryEntry.requiresAdjacentResponsesToolResults }
       : {}),
+    ...(provider.strictResponsesToolSchemas === undefined
+      && registryEntry.strictResponsesToolSchemas !== undefined
+      ? { strictResponsesToolSchemas: registryEntry.strictResponsesToolSchemas }
+      : {}),
     ...(provider.supportsServiceTier === undefined && registryEntry.supportsServiceTier !== undefined
       ? { supportsServiceTier: registryEntry.supportsServiceTier }
       : {}),

@@ -18,7 +18,10 @@ export function customToolItemId(id: unknown): unknown {
   return id.startsWith("fc_") ? `ctc_${id.slice(3)}` : id;
 }
 
-export function collectRoutedCustomToolNames(body: unknown): Set<string> {
+export function collectRoutedCustomToolNames(
+  body: unknown,
+  passthrough: ReadonlySet<string> = ROUTED_CUSTOM_TOOL_PASSTHROUGH,
+): Set<string> {
   const names = new Set<string>();
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) {
@@ -29,7 +32,7 @@ export function collectRoutedCustomToolNames(body: unknown): Set<string> {
     if (
       value.type === "custom"
       && typeof value.name === "string"
-      && !ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(value.name)
+      && !passthrough.has(value.name)
     ) {
       names.add(value.name);
     }
@@ -60,8 +63,11 @@ function rewriteForUpstream(
   value: unknown,
   names: ReadonlySet<string>,
   callIds: ReadonlySet<string>,
+  convertApplyPatch: boolean,
 ): unknown {
-  if (Array.isArray(value)) return value.map(entry => rewriteForUpstream(entry, names, callIds));
+  if (Array.isArray(value)) {
+    return value.map(entry => rewriteForUpstream(entry, names, callIds, convertApplyPatch));
+  }
   if (!isPlainObject(value)) return value;
 
   if (value.type === "custom" && typeof value.name === "string" && names.has(value.name)) {
@@ -69,7 +75,11 @@ function rewriteForUpstream(
     const isDefinition = typeof value.description === "string"
       || isPlainObject(value.format)
       || isPlainObject(value.parameters);
-    if (!isDefinition) return { ...rest, type: "function" };
+    // A strict Responses upstream rejects `custom` tools outright; convert even
+    // the bare passthrough declarations (apply_patch) into a function that
+    // carries the freeform input as a string parameter. The response side
+    // restores the call to a custom_tool_call via the converted-names set.
+    if (!isDefinition && !convertApplyPatch) return { ...rest, type: "function" };
     const inputDescription = value.name === "exec"
       ? "JavaScript source for unified exec. Use await tools.exec_command(...) for shell commands and text(...) to return textual output; do not provide a bare shell command."
       : "Raw input for this client-executed custom tool.";
@@ -114,22 +124,27 @@ function rewriteForUpstream(
   let changed = false;
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    const rewritten = rewriteForUpstream(entry, names, callIds);
+    const rewritten = rewriteForUpstream(entry, names, callIds, convertApplyPatch);
     next[key] = rewritten;
     changed ||= rewritten !== entry;
   }
   return changed ? next : value;
 }
 
-export function rewriteRoutedCustomToolsForUpstream(body: unknown): {
+export function rewriteRoutedCustomToolsForUpstream(
+  body: unknown,
+  options?: { convertApplyPatch?: boolean },
+): {
   body: unknown;
   names: Set<string>;
 } {
-  const names = collectRoutedCustomToolNames(body);
+  const convertApplyPatch = options?.convertApplyPatch === true;
+  const passthrough = convertApplyPatch ? new Set<string>() : ROUTED_CUSTOM_TOOL_PASSTHROUGH;
+  const names = collectRoutedCustomToolNames(body, passthrough);
   if (names.size === 0) return { body, names };
   const callIds = new Set<string>();
   collectConvertedCallIds(body, names, callIds);
-  return { body: rewriteForUpstream(body, names, callIds), names };
+  return { body: rewriteForUpstream(body, names, callIds, convertApplyPatch), names };
 }
 
 export function restoreRoutedCustomCalls(

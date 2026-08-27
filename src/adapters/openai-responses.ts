@@ -359,22 +359,77 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-function normalizeFunctionToolSchema(tool: unknown): unknown {
-  if (!isPlainObject(tool) || tool.type !== "function") return tool;
-  if (isPlainObject(tool.parameters) && tool.parameters.type === "object") return tool;
-  return {
-    ...tool,
-    parameters: { ...(isPlainObject(tool.parameters) ? tool.parameters : {}), type: "object" },
-  };
+function withCompletedRequired(parameters: Record<string, unknown>): Record<string, unknown> {
+  // Console Go (and other strict Responses validators) require `required` to
+  // exist and to include every key in `properties`. Codex ships lenient schemas
+  // where optional keys are omitted from `required` (e.g. `list_threads` has
+  // only `limit`, with `required: []`), which such an upstream rejects with
+  // "Missing '<key>'". Complete the array so the request survives validation.
+  if (!isPlainObject(parameters.properties)) return parameters;
+  const keys = Object.keys(parameters.properties);
+  if (keys.length === 0) return parameters;
+  const required = Array.isArray(parameters.required)
+    ? (parameters.required as unknown[]).filter((k): k is string => typeof k === "string")
+    : [];
+  const missing = keys.filter((k) => !required.includes(k));
+  if (missing.length === 0) return parameters;
+  return { ...parameters, required: [...required, ...missing] };
 }
 
-function normalizeToolSchemas(body: unknown): unknown {
+function normalizeToolSchema(tool: unknown, strictResponses: boolean): unknown {
+  if (!isPlainObject(tool)) return tool;
+  // Strict validators apply the same `required`-coverage rule to non-function
+  // tool kinds that carry a JSON schema, e.g. `tool_search` (Codex ships
+  // `{ query, limit }` with `required: ["query"]`, which Console Go rejects).
+  if (strictResponses && tool.type === "tool_search" && isPlainObject(tool.parameters)) {
+    const parameters = withCompletedRequired(tool.parameters);
+    return parameters === tool.parameters ? tool : { ...tool, parameters };
+  }
+  // Console Go's /responses validator rejects `search_content_types` on plain
+  // `web_search` tools ("only supported for web_search_preview tools"), and its
+  // current web_search executor rejects the field even on `web_search_preview`
+  // ("not supported by the current Responses web_search executor"). Codex ships
+  // a `web_search` tool carrying the field, so strip it for strict upstreams.
+  if (
+    strictResponses
+    && tool.type === "web_search"
+    && Array.isArray(tool.search_content_types)
+    && tool.search_content_types.length > 0
+  ) {
+    const { search_content_types: _stripped, ...rest } = tool;
+    return rest;
+  }
+  if (tool.type !== "function") return tool;
+  const parameters = isPlainObject(tool.parameters) ? tool.parameters : {};
+  if (parameters.type === "object" && !strictResponses) return tool;
+  let next = parameters;
+  if (next.type !== "object") {
+    next = { ...next, type: "object" };
+  }
+  if (strictResponses) {
+    next = withCompletedRequired(next);
+  }
+  return next === parameters ? tool : { ...tool, parameters: next };
+}
+
+function normalizeToolSchemas(body: unknown, strictResponses: boolean): unknown {
   if (!isPlainObject(body)) return body;
 
   const normalizeTools = (tools: unknown[]): unknown[] => {
     let changed = false;
     const normalized = tools.map((tool) => {
-      const fixed = normalizeFunctionToolSchema(tool);
+      let fixed = normalizeToolSchema(tool, strictResponses);
+      // Strict validators descend into namespace tool lists, so complete
+      // `required` for the function tools nested inside them too.
+      if (
+        strictResponses
+        && isPlainObject(fixed)
+        && fixed.type === "namespace"
+        && Array.isArray(fixed.tools)
+      ) {
+        const inner = normalizeTools(fixed.tools);
+        if (inner !== fixed.tools) fixed = { ...fixed, tools: inner };
+      }
       if (fixed !== tool) changed = true;
       return fixed;
     });
@@ -1409,11 +1464,20 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = promoteClientLoadedTools(outBody);
       }
       if (provider.authMode !== "forward") {
-        const rewritten = rewriteRoutedCustomToolsForUpstream(outBody);
+        // A strict Responses upstream rejects the `custom` tool type outright
+        // ("`custom` tools are not supported on this endpoint"), including the
+        // apply_patch freeform tool that routed providers normally pass
+        // through. Convert it too; the response side restores the call.
+        const rewritten = rewriteRoutedCustomToolsForUpstream(outBody, {
+          convertApplyPatch: provider.strictResponsesToolSchemas === true,
+        });
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
+      const sanitizedBody = normalizeToolSchemas(
+        stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))),
+        provider.strictResponsesToolSchemas === true,
+      );
       const body = JSON.stringify(stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,

@@ -67,6 +67,57 @@ describe("routed Responses custom-tool compatibility", () => {
     expect(body.input[3]).toEqual(raw.input[3]);
   });
 
+  test("strict mode also rewrites apply_patch definitions and restores its calls", () => {
+    const raw = {
+      model: "deepseek-v4-flash",
+      tools: [
+        { type: "custom", name: "apply_patch", description: "Apply a patch", format: { type: "grammar", syntax: "lark" } },
+        { type: "custom", name: "exec", description: "Run JavaScript" },
+      ],
+      input: [
+        { type: "custom_tool_call", id: "ctc_patch", call_id: "call_patch", name: "apply_patch", input: "*** Begin Patch" },
+      ],
+    };
+
+    const rewritten = rewriteRoutedCustomToolsForUpstream(raw, { convertApplyPatch: true });
+    expect(rewritten.names).toEqual(new Set(["apply_patch", "exec"]));
+    const body = rewritten.body as typeof raw;
+    expect(body.tools[0]).toMatchObject({
+      type: "function",
+      name: "apply_patch",
+      parameters: {
+        type: "object",
+        properties: { input: { type: "string" } },
+        required: ["input"],
+        additionalProperties: false,
+      },
+    });
+    expect(body.tools[0]).not.toHaveProperty("format");
+    expect(body.input[0]).toMatchObject({
+      type: "function_call",
+      call_id: "call_patch",
+      name: "apply_patch",
+      arguments: JSON.stringify({ input: "*** Begin Patch" }),
+    });
+
+    const upstream = JSON.stringify({
+      output: [
+        { type: "function_call", id: "fc_patch", call_id: "call_patch", name: "apply_patch", arguments: "{\"input\":\"*** Begin Patch\"}", status: "completed" },
+      ],
+    });
+    const restored = JSON.parse(restoreRoutedCustomCallsInJson(
+      upstream,
+      new Set(["apply_patch", "exec"]),
+    )) as { output: Array<Record<string, unknown>> };
+    expect(restored.output[0]).toMatchObject({
+      type: "custom_tool_call",
+      call_id: "call_patch",
+      name: "apply_patch",
+      input: "*** Begin Patch",
+    });
+    expect(restored.output[0]).not.toHaveProperty("arguments");
+  });
+
   test("restores non-streaming exec calls while leaving ordinary functions alone", () => {
     const upstream = JSON.stringify({
       id: "resp_1",

@@ -1360,6 +1360,15 @@ export interface OcxProviderConfig {
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
+   * Responses upstream whose schema validator requires every function tool's
+   * `parameters.required` to include every key in `parameters.properties`
+   * (OpenAI strict-mode style). When set, the openai-responses adapter completes
+   * `required` from `properties` for function tools before payload construction,
+   * because Codex ships lenient schemas (optional keys omitted from `required`)
+   * that such an upstream rejects outright.
+   */
+  strictResponsesToolSchemas?: boolean;
+  /**
    * Provider fallback for the OpenAI `service_tier` parameter. On Responses routes this
    * is the complete wire opt-in; Chat routes additionally require `chatServiceTier` or an
    * exact-model true declaration.

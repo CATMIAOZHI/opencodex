@@ -1067,6 +1067,242 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.input).toHaveLength(3);
     expect(body.input[0]).toMatchObject({ type: "reasoning", id: "rs_1" });
   });
+
+  test("strict responses tool schemas complete `required` on top-level functions", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      ...provider,
+      strictResponsesToolSchemas: true,
+    });
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [
+          {
+            type: "function",
+            name: "list_threads",
+            parameters: {
+              type: "object",
+              properties: { limit: { type: "integer" } },
+              required: [],
+            },
+          },
+          {
+            type: "function",
+            name: "already_complete",
+            parameters: {
+              type: "object",
+              properties: { path: { type: "string" } },
+              required: ["path"],
+            },
+          },
+        ],
+      },
+    }, { headers: new Headers() }).body) as {
+      tools: Array<{ name: string; parameters: { required?: string[] } }>;
+    };
+
+    expect(body.tools.find(tool => tool.name === "list_threads")?.parameters.required)
+      .toEqual(["limit"]);
+    expect(body.tools.find(tool => tool.name === "already_complete")?.parameters.required)
+      .toEqual(["path"]);
+  });
+
+  test("strict responses tool schemas descend into namespace tools", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      ...provider,
+      strictResponsesToolSchemas: true,
+    });
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [
+          {
+            type: "namespace",
+            name: "workspace",
+            description: "Workspace tools",
+            tools: [
+              {
+                type: "function",
+                name: "list_archived_threads",
+                parameters: {
+                  type: "object",
+                  properties: { limit: { type: "integer" } },
+                  required: [],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    }, { headers: new Headers() }).body) as {
+      tools: Array<{ type: string; tools?: Array<{ name: string; parameters: { required?: string[] } }> }>;
+    };
+
+    const inner = body.tools.find(tool => tool.type === "namespace")?.tools;
+    expect(inner?.find(tool => tool.name === "list_archived_threads")?.parameters.required)
+      .toEqual(["limit"]);
+  });
+
+  test("strict responses tool schemas also complete additional_tools input", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      ...provider,
+      strictResponsesToolSchemas: true,
+    });
+    const rawBody = {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "additional_tools",
+          role: "developer",
+          tools: [
+            {
+              type: "function",
+              name: "search_messages",
+              parameters: {
+                type: "object",
+                properties: {
+                  query: { type: "string" },
+                  limit: { type: "integer" },
+                },
+                required: [],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: rawBody.model,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: rawBody,
+    }, { headers: new Headers() }).body) as {
+      input: Array<{
+        type: string;
+        tools?: Array<{ name: string; parameters: { required?: string[] } }>;
+      }>;
+    };
+
+    const added = body.input.find(item => item.type === "additional_tools")?.tools;
+    expect(added?.find(tool => tool.name === "search_messages")?.parameters.required)
+      .toEqual(["query", "limit"]);
+  });
+
+  test("strict responses tool schemas complete `required` on tool_search tools", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      ...provider,
+      strictResponsesToolSchemas: true,
+    });
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [
+          {
+            type: "tool_search",
+            execution: "client",
+            description: "Search deferred tools",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+                limit: { type: "integer" },
+              },
+              required: ["query"],
+              additionalProperties: false,
+            },
+          },
+        ],
+      },
+    }, { headers: new Headers() }).body) as {
+      tools: Array<{ type: string; parameters?: { required?: string[] } }>;
+    };
+
+    expect(body.tools.find(tool => tool.type === "tool_search")?.parameters?.required)
+      .toEqual(["query", "limit"]);
+  });
+
+  test("strict responses tool schemas strip search_content_types from web_search", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      ...provider,
+      strictResponsesToolSchemas: true,
+    });
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [
+          {
+            type: "web_search",
+            external_web_access: true,
+            search_content_types: ["text", "image"],
+          },
+          {
+            type: "web_search",
+            external_web_access: true,
+          },
+        ],
+      },
+    }, { headers: new Headers() }).body) as {
+      tools: Array<{ type: string; search_content_types?: string[] }>;
+    };
+
+    const withTypes = body.tools.find(tool => Array.isArray(tool.search_content_types));
+    expect(withTypes).toBeUndefined();
+    const webSearch = body.tools[0];
+    expect(webSearch).toMatchObject({ type: "web_search", external_web_access: true });
+    expect(webSearch).not.toHaveProperty("search_content_types");
+    expect(body.tools[1]).toMatchObject({ type: "web_search", external_web_access: true });
+  });
+
+  test("non-strict providers keep lenient required arrays untouched", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: "gpt-5.5",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.5",
+        input: [],
+        tools: [
+          {
+            type: "function",
+            name: "list_threads",
+            parameters: {
+              type: "object",
+              properties: { limit: { type: "integer" } },
+              required: [],
+            },
+          },
+        ],
+      },
+    }, { headers: new Headers() }).body) as {
+      tools: Array<{ name: string; parameters: { required: string[] } }>;
+    };
+
+    expect(body.tools.find(tool => tool.name === "list_threads")?.parameters.required)
+      .toEqual([]);
+  });
 });
 
 describe("OpenAI Responses hosted-tool name conflicts", () => {
