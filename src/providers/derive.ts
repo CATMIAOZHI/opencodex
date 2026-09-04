@@ -261,6 +261,9 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.requiresAdjacentResponsesToolResults !== undefined
       ? { requiresAdjacentResponsesToolResults: entry.requiresAdjacentResponsesToolResults }
       : {}),
+    ...(entry.strictResponsesToolSchemas !== undefined
+      ? { strictResponsesToolSchemas: entry.strictResponsesToolSchemas }
+      : {}),
     ...(entry.annotateEmptyToolOutputs !== undefined
       ? { annotateEmptyToolOutputs: entry.annotateEmptyToolOutputs }
       : {}),
@@ -483,7 +486,11 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.models && seed.models) prov.models = [...seed.models];
   if (prov.liveModels === undefined && seed.liveModels !== undefined) prov.liveModels = seed.liveModels;
   if (prov.contextWindow === undefined && seed.contextWindow !== undefined) prov.contextWindow = seed.contextWindow;
-  if (!prov.modelContextWindows && seed.modelContextWindows) prov.modelContextWindows = { ...seed.modelContextWindows };
+  // Fill individual registry keys while preserving every explicit saved value.
+  // A partial persisted map must not suppress metadata added in a later release.
+  if (seed.modelContextWindows) {
+    prov.modelContextWindows = { ...seed.modelContextWindows, ...(prov.modelContextWindows ?? {}) };
+  }
   // Per-model fill, not all-or-nothing: an operator who renamed ONE model must still receive
   // labels for the rest, and an existing install must pick up newly seeded rows on enrich.
   if (seed.modelDisplayNames) {
@@ -524,6 +531,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.statelessResponses === undefined && seed.statelessResponses !== undefined) prov.statelessResponses = seed.statelessResponses;
   if (prov.requiresAdjacentResponsesToolResults === undefined && seed.requiresAdjacentResponsesToolResults !== undefined) {
     prov.requiresAdjacentResponsesToolResults = seed.requiresAdjacentResponsesToolResults;
+  }
+  if (prov.strictResponsesToolSchemas === undefined && seed.strictResponsesToolSchemas !== undefined) {
+    prov.strictResponsesToolSchemas = seed.strictResponsesToolSchemas;
   }
   if (prov.annotateEmptyToolOutputs === undefined && seed.annotateEmptyToolOutputs !== undefined) {
     prov.annotateEmptyToolOutputs = seed.annotateEmptyToolOutputs;

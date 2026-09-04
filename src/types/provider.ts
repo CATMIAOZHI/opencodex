@@ -241,6 +241,13 @@ export interface OcxProviderConfig {
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
+   * Responses upstream whose schema validator requires every function-like
+   * tool's `parameters.required` to include every key in
+   * `parameters.properties`. When enabled, the Responses adapter completes
+   * those arrays before serialization.
+   */
+  strictResponsesToolSchemas?: boolean;
+  /**
    * When enabled, a tool result that is present but empty (no usable text or content
    * part) is rewritten to an explicit annotation before it reaches the upstream wire,
    * so models do not silently accept an empty result or re-issue the same call.

@@ -380,6 +380,10 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       && registryEntry.requiresAdjacentResponsesToolResults !== undefined
       ? { requiresAdjacentResponsesToolResults: registryEntry.requiresAdjacentResponsesToolResults }
       : {}),
+    ...(provider.strictResponsesToolSchemas === undefined
+      && registryEntry.strictResponsesToolSchemas !== undefined
+      ? { strictResponsesToolSchemas: registryEntry.strictResponsesToolSchemas }
+      : {}),
     ...(provider.annotateEmptyToolOutputs === undefined
       && registryEntry.annotateEmptyToolOutputs !== undefined
       ? { annotateEmptyToolOutputs: registryEntry.annotateEmptyToolOutputs }

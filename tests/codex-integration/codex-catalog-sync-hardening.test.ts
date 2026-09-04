@@ -223,7 +223,7 @@ describe("Codex catalog sync hardening", () => {
       comp_hash: "native-sol-hash",
       base_instructions: "Native Sol instructions",
       model_messages: { instructions_template: "Native Sol instructions" },
-      tool_mode: "code_mode_only",
+      tool_mode: "direct",
       opencodex_catalog_kind: "account-selector-v1",
     });
   });
@@ -438,7 +438,7 @@ describe("Codex catalog sync hardening", () => {
       max_context_window: 272_000,
       auto_compact_token_limit: 244_800,
       comp_hash: "3000",
-      tool_mode: "code_mode_only",
+      tool_mode: "direct",
       use_responses_lite: true,
       supports_parallel_tool_calls: true,
     });
@@ -538,7 +538,7 @@ describe("Codex catalog sync hardening", () => {
       max_context_window: 922_000,
       auto_compact_token_limit: 829_800,
       comp_hash: "3000",
-      tool_mode: "code_mode_only",
+      tool_mode: "direct",
       use_responses_lite: true,
       supports_parallel_tool_calls: true,
       supports_search_tool: true,
@@ -630,7 +630,7 @@ describe("Codex catalog sync hardening", () => {
     expect(rows.some(row => row.slug === "desktop/gpt-5.5")).toBe(false);
   });
 
-  test("catalog sync persists routed code mode without changing native account rows", () => {
+  test("catalog sync applies the global direct policy to routed and native account rows", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -664,9 +664,9 @@ describe("Codex catalog sync hardening", () => {
       tool_mode?: string | null;
     }>;
     expect(rows.find(row => row.slug === "deepseek/deepseek-v4-flash")?.tool_mode)
-      .toBe("code_mode_only");
-    expect(rows.find(row => row.slug === "gpt-5.5")?.tool_mode).toBe("code");
-    expect(rows.find(row => row.slug === "team/gpt-5.5")?.tool_mode).toBe("code");
+      .toBe("direct");
+    expect(rows.find(row => row.slug === "gpt-5.5")?.tool_mode).toBe("direct");
+    expect(rows.find(row => row.slug === "team/gpt-5.5")?.tool_mode).toBe("direct");
   });
 
   test("disabled canonical OpenAI keeps bare bootstrap rows but omits unrouteable account rows", () => {

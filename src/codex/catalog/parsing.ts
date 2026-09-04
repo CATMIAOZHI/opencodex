@@ -642,6 +642,78 @@ export function applyRoutedCodexToolMode(
   return entry;
 }
 
+const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-pro", "deepseek-v4-flash"]);
+
+export function isDeepSeekV4Model(modelId?: string): boolean {
+  return typeof modelId === "string" && DEEPSEEK_V4_MODEL_IDS.has(modelId);
+}
+
+function deepSeekV4ModelIdFromCatalogEntry(entry: RawEntry): string | undefined {
+  const slug = typeof entry.slug === "string" ? entry.slug : "";
+  const slash = slug.indexOf("/");
+  if (slash < 0) return undefined;
+  const modelId = slug.slice(slash + 1);
+  if (isDeepSeekV4Model(modelId)) return modelId;
+  // Command Code exposes vendor-qualified native ids, which the routed slug
+  // codec flattens from `deepseek/deepseek-v4-*` to `deepseek-deepseek-v4-*`.
+  const vendorPrefixedId = modelId.startsWith("deepseek-")
+    ? modelId.slice("deepseek-".length)
+    : "";
+  return isDeepSeekV4Model(vendorPrefixedId) ? vendorPrefixedId : undefined;
+}
+
+export function applyDeepSeekV4CodexProfile(
+  entry: RawEntry,
+  modelId?: string,
+  promptSource?: RawEntry,
+): RawEntry {
+  // Combo aliases are user-authored prompt contracts. They still receive the
+  // global direct/V2 policy below, but never a model-family prompt rewrite.
+  if (entry.owned_by === COMBO_NAMESPACE) return entry;
+  const resolvedModelId = modelId ?? deepSeekV4ModelIdFromCatalogEntry(entry);
+  if (!isDeepSeekV4Model(resolvedModelId)) return entry;
+
+  // New Codex catalog loaders require the full instruction metadata. Restore
+  // the same contract as GPT-5.6 Sol after routed normalization removed it.
+  const source = promptSource ?? UPSTREAM_NATIVE_ENTRIES.get("gpt-5.6-sol");
+  if (source && "model_messages" in source) {
+    entry.model_messages = structuredClone(source.model_messages);
+  } else {
+    delete entry.model_messages;
+  }
+  if (source && "base_instructions" in source) {
+    entry.base_instructions = source.base_instructions;
+  } else {
+    delete entry.base_instructions;
+  }
+  entry.tool_mode = "direct";
+  entry.multi_agent_version = "v2";
+  entry.use_responses_lite = false;
+  entry.include_skills_usage_instructions = false;
+  entry.include_plugin_usage_instructions = false;
+  entry.include_apps_usage_instructions = false;
+  return entry;
+}
+
+export function applyDeepSeekV4CodexProfiles(entries: RawEntry[]): RawEntry[] {
+  // Use the pinned native snapshot, not a same-slug combo/native alias that can
+  // legally replace the picker row and carry user-authored identity prompts.
+  const promptSource = UPSTREAM_NATIVE_ENTRIES.get("gpt-5.6-sol");
+  for (const entry of entries) {
+    applyDeepSeekV4CodexProfile(entry, undefined, promptSource);
+  }
+  return entries;
+}
+
+/** Apply the operator's explicit direct-tool/V2 policy to every catalog row. */
+export function applyGlobalDirectV2CodexProfiles(entries: RawEntry[]): RawEntry[] {
+  for (const entry of entries) {
+    entry.tool_mode = "direct";
+    entry.multi_agent_version = "v2";
+  }
+  return entries;
+}
+
 /**
  * @param v2FeatureEnabled When the native multi_agent_v2 feature is on, "default"
  *   mode stamps unpinned entries as "v2" instead of deleting the key. The native

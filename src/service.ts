@@ -7,9 +7,9 @@
  */
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
-import { accessSync, chmodSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "./config";
 import { readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config/process-state";
 import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
@@ -2389,11 +2389,60 @@ function uninstallLaunchd(): void {
  * over, since before #2107 these files had no hardening at all and a failure here would
  * regress a user who has no credential to protect.
  */
-export function writeServiceDefinitionFile(path: string, content: string, encoding: "utf8" | "utf16le"): void {
-  writeFileSync(path, content, { encoding, mode: 0o600 });
-  try { chmodSync(path, 0o600); } catch { /* superseded by the Windows ACL below */ }
-  if (process.platform === "win32") {
-    hardenSecretPath(path, { required: definitionCarriesCredential(content) });
+export interface ServiceDefinitionWriteDeps {
+  writeFile?: (
+    path: string,
+    content: string,
+    options: { encoding: "utf8" | "utf16le"; mode: number; flag: "wx" },
+  ) => void;
+  chmod?: (path: string, mode: number) => void;
+  harden?: (path: string, options: { required: boolean }) => void;
+  rename?: (source: string, destination: string) => void;
+  unlink?: (path: string) => void;
+  exists?: (path: string) => boolean;
+  uuid?: () => string;
+  platform?: NodeJS.Platform;
+}
+
+export function writeServiceDefinitionFile(
+  path: string,
+  content: string,
+  encoding: "utf8" | "utf16le",
+  deps: ServiceDefinitionWriteDeps = {},
+): void {
+  const writeFile = deps.writeFile ?? writeFileSync;
+  const chmod = deps.chmod ?? chmodSync;
+  const harden = deps.harden ?? hardenSecretPath;
+  const rename = deps.rename ?? renameSync;
+  const unlink = deps.unlink ?? unlinkSync;
+  const exists = deps.exists ?? existsSync;
+  const uuid = deps.uuid ?? randomUUID;
+  const platform = deps.platform ?? process.platform;
+  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${uuid()}.tmp`);
+
+  try {
+    // Publishing a sibling file with rename keeps the registered launcher path either
+    // wholly old or wholly new across a process/host failure. The old in-place write
+    // truncated the only Task Scheduler boot path before the replacement was durable.
+    writeFile(temporary, content, { encoding, mode: 0o600, flag: "wx" });
+    try { chmod(temporary, 0o600); } catch { /* superseded by the Windows ACL below */ }
+    if (platform === "win32") {
+      harden(temporary, { required: definitionCarriesCredential(content) });
+    }
+    rename(temporary, path);
+  } catch (error) {
+    let cleanupError: unknown;
+    if (exists(temporary)) {
+      try {
+        unlink(temporary);
+      } catch (failedCleanup) {
+        cleanupError = failedCleanup;
+      }
+    }
+    if (cleanupError) {
+      throw new AggregateError([error, cleanupError], `Atomic service definition publish failed: ${path}`);
+    }
+    throw error;
   }
 }
 

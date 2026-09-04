@@ -44,7 +44,7 @@ import {
 } from "../model-entitlements";
 
 
-import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, findSupportedNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readCodexCatalogPathForHome, readConfiguredAutoReviewModel, readNativeBaseline } from "./parsing";
+import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyDeepSeekV4CodexProfiles, applyGlobalDirectV2CodexProfiles, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, findSupportedNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readCodexCatalogPathForHome, readConfiguredAutoReviewModel, readNativeBaseline } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { accountBoundNativeOpenAiSlugs, accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, CODEX_NATIVE_ALIAS_CATALOG_KIND, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, isNativeAliasCatalogEntry, isUnsupportedOpenAiNativeSlug, NATIVE_OPENAI_MODELS, nativeContextLimits, observedAccountBoundNativeEntries, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry, type NativeContextLimitsInput } from "./metadata";
 import {
@@ -696,10 +696,14 @@ export function buildCatalogEntriesFromObservedState({
       delete entry.prefer_websockets;
     }
   }
-  return applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled, {
-    keepNativeChatGptOnV1,
-    preserveDefaultMultiAgentVersion: isReserveCatalogProjection,
-  });
+  return applyGlobalDirectV2CodexProfiles(
+    applyDeepSeekV4CodexProfiles(
+      applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled, {
+        keepNativeChatGptOnV1,
+        preserveDefaultMultiAgentVersion: isReserveCatalogProjection,
+      }),
+    ),
+  );
 }
 
 export function resetCatalogRuntimeStateForTests(): void {
@@ -1272,11 +1276,15 @@ export function mergeCatalogEntriesFromObservedState({
   // Native enable/disable runs as the LAST pass so the upstream-upgrade branch above can never
   // clobber a hide flag back to list. Bare ids disable every account clone; qualified ids disable
   // only their generated account row.
-  const versionedEntries = applyMultiAgentMode(
-    applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
-    multiAgentMode,
-    multiAgentV2Enabled,
-    { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection },
+  const versionedEntries = applyGlobalDirectV2CodexProfiles(
+    applyDeepSeekV4CodexProfiles(
+      applyMultiAgentMode(
+        applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
+        multiAgentMode,
+        multiAgentV2Enabled,
+        { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection },
+      ),
+    ),
   );
   applyFullModelPickerOrder(versionedEntries, modelPickerOrder);
   for (const entry of versionedEntries) {

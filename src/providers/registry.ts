@@ -241,6 +241,12 @@ export interface ProviderRegistryEntry {
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
+   * Responses validator requires `required` to cover every key in
+   * `properties` for function-like tool schemas. Seeded/backfilled like other
+   * fixed wire capabilities.
+   */
+  strictResponsesToolSchemas?: boolean;
+  /**
    * When enabled, tool results that are present but empty are annotated on the wire.
    * Seeded/backfilled like other fixed wire capabilities.
    */
@@ -1715,6 +1721,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "muse-spark-1.3-contributor": "openai-responses",
       "muse-spark-1.2-contributor": "openai-responses",
     },
+    // Console Go rejects Codex's lenient tool schemas when `required` omits
+    // optional properties (observed as "Missing 'limit'").
+    strictResponsesToolSchemas: true,
+    // Console Go's Responses endpoint rejects native custom tools. The generic
+    // compatibility layer lowers them to function tools and restores calls.
+    supportsResponsesCustomTools: false,
     modelContextWindows: {
       "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
       // The DeepSeek vision preview id is metadata-only here: the Go roster is
@@ -1749,6 +1761,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "kimi-k3": KIMI_CODING_K3_REASONING_EFFORTS,
       "kimi-k2.7-code": [],
       "kimi-k2.7-code-highspeed": [],
+      // Muse rejects `ultra`; keep Codex's picker on its accepted ladder.
+      "muse-spark-1.2": ["low", "medium", "high", "xhigh", "max"],
+      "muse-spark-1.2-contributor": ["low", "medium", "high", "xhigh", "max"],
+      "muse-spark-1.1": ["low", "medium", "high", "xhigh", "max"],
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
@@ -2901,7 +2917,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Owner-audited exact outage fallback: these current Ollama Cloud GLM-5.3 rows have
     // 1,048,576-token context windows. Live discovery and successful /api/show enrichment keep
     // their existing precedence; these values prevent a failed show from becoming generic.
-    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576 },
+    modelContextWindows: {
+      "glm-5.3": 1_048_576,
+      "glm-5.3-flash": 1_048_576,
+      "glm-5.2": 1_048_576,
+      "deepseek-v4-pro": 1_048_576,
+      "kimi-k3": KIMI_K3_1M_CONTEXT_WINDOW,
+    },
     noVisionModels: [
       // glm-5.3-flash is absent on purpose: native VLM
       // (docs.z.ai/guides/vlm/glm-5.3-flash), so its images skip the sidecar.
