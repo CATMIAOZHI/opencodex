@@ -1,6 +1,7 @@
 /**
  * v2 / ultra catalog tests: ultra is always advertised regardless of v2 toggle.
- * The v2 toggle controls the multi-agent surface only, not ultra visibility.
+ * The v2 toggle still controls Codex configuration transitions; this local
+ * installation's final catalog pass independently publishes every row as V2.
  * config.toml reader + max_concurrent_threads_per_session writer fixtures.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -1866,10 +1867,10 @@ describe("3-state multi-agent mode", () => {
     }
   });
 
-  test("mode v1: ALL entries get multi_agent_version = v1 (overrides upstream pins)", () => {
+  test("the operator's final V2 policy overrides a requested v1 catalog mode", () => {
     const entries = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "v1");
     for (const e of entries) {
-      expect(e.multi_agent_version).toBe("v1");
+      expect(e.multi_agent_version).toBe("v2");
     }
   });
 
@@ -1880,23 +1881,20 @@ describe("3-state multi-agent mode", () => {
     }
   });
 
-  test("mode default: upstream pins preserved (sol=v2, luna=v1, others=null)", () => {
+  test("the operator's final V2 policy overrides default-mode upstream pins", () => {
     const entries = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "default");
     const sol = entries.find(e => e.slug === "gpt-5.6-sol")!;
     const luna = entries.find(e => e.slug === "gpt-5.6-luna")!;
     const native = entries.find(e => e.slug === "gpt-5.5")!;
     expect(sol.multi_agent_version).toBe("v2");
-    expect(luna.multi_agent_version).toBe("v1");
-    // gpt-5.5 follows codex flag (null in catalog → codex decides)
-    expect(native.multi_agent_version).toBeUndefined();
+    expect(luna.multi_agent_version).toBe("v2");
+    expect(native.multi_agent_version).toBe("v2");
   });
 
   /*
-   * Option B's write half: the native binary validates spawn_agent models against the
-   * catalog WE write, so an unpinned routed model must be stamped "v2" there or it is
-   * refused at spawn time no matter what our own roster advertises. The stamp is gated
-   * on the feature being ON, which is why the default-mode test above stays green: it
-   * runs with the feature off and must remain byte-identical to the old behavior.
+   * The native binary validates spawn_agent models against the catalog WE write.
+   * This installation deliberately publishes V2 for every final row regardless
+   * of the upstream feature-gated/default-mode transform.
    *
    * Both callers of applyMultiAgentMode are covered, because a feature flag threaded
    * through only one of them is the failure this contract exists to catch.
@@ -1912,8 +1910,8 @@ describe("3-state multi-agent mode", () => {
       const built = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "default");
       // Unpinned native gains the stamp so the binary will accept it as a subagent.
       expect(built.find(e => e.slug === "gpt-5.5")!.multi_agent_version).toBe("v2");
-      // Genuine upstream pins are never rewritten: "v1" stays excluded, "v2" stays "v2".
-      expect(built.find(e => e.slug === "gpt-5.6-luna")!.multi_agent_version).toBe("v1");
+      // The final operator policy rewrites both upstream V1 and V2 pins to V2.
+      expect(built.find(e => e.slug === "gpt-5.6-luna")!.multi_agent_version).toBe("v2");
       expect(built.find(e => e.slug === "gpt-5.6-sol")!.multi_agent_version).toBe("v2");
 
       // Path 2: mergeCatalogEntriesForSync (existing catalog on disk).
@@ -1929,23 +1927,22 @@ describe("3-state multi-agent mode", () => {
     }
   });
 
-  test("default mode + v2 feature OFF is byte-identical to the historical behavior", () => {
+  test("the final operator policy publishes V2 even when the native feature is off", () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\n");
     const oldCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = dirname(path);
     try {
       expect(isMultiAgentV2Enabled()).toBe(false);
       const entries = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "default");
-      // No stamp: the key stays absent exactly as before this change.
-      expect(entries.find(e => e.slug === "gpt-5.5")!.multi_agent_version).toBeUndefined();
-      expect(entries.find(e => e.slug === "gpt-5.6-luna")!.multi_agent_version).toBe("v1");
+      expect(entries.find(e => e.slug === "gpt-5.5")!.multi_agent_version).toBe("v2");
+      expect(entries.find(e => e.slug === "gpt-5.6-luna")!.multi_agent_version).toBe("v2");
       expect(entries.find(e => e.slug === "gpt-5.6-sol")!.multi_agent_version).toBe("v2");
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
     }
   });
 
-  test("mode v1 in mergeCatalogEntriesForSync overrides preserved genuine native", () => {
+  test("the final operator policy overrides v1 during catalog merge", () => {
     const diskSol = {
       ...template(),
       slug: "gpt-5.6-sol",
@@ -1957,7 +1954,7 @@ describe("3-state multi-agent mode", () => {
       new Set(), null, new Set(), new Set(), "v1",
     );
     const sol = merged.find(e => e.slug === "gpt-5.6-sol")!;
-    expect(sol.multi_agent_version).toBe("v1");
+    expect(sol.multi_agent_version).toBe("v2");
   });
 
   test("cli multiAgentModeLine describes each state", () => {
@@ -1967,10 +1964,9 @@ describe("3-state multi-agent mode", () => {
     expect(multiAgentModeLine("v2", true)).toContain("v2 hybrid");
   });
 
-  test("mode default restores upstream pins after a prior forced v2 (stale-clear regression)", () => {
-    // Simulate: disk entries were synced while mode=v2 (all entries stamped v2),
-    // then mode switched to default. mergeCatalogEntriesForSync must clear the
-    // stale forced value and restore upstream pins.
+  test("mode default keeps the final operator V2 policy after a prior forced sync", () => {
+    // A mode transition may restore upstream pins internally, but the final
+    // operator pass deliberately republishes every persisted row as V2.
     const diskSol = { ...template(), slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", multi_agent_version: "v2" };
     const diskLuna = { ...template(), slug: "gpt-5.6-luna", display_name: "GPT-5.6 Luna", multi_agent_version: "v2" }; // was forced
     const diskNative = { ...template(), slug: "gpt-5.5", display_name: "gpt-5.5", multi_agent_version: "v2" }; // was forced
@@ -1981,12 +1977,9 @@ describe("3-state multi-agent mode", () => {
     const sol = merged.find(e => e.slug === "gpt-5.6-sol")!;
     const luna = merged.find(e => e.slug === "gpt-5.6-luna")!;
     const native = merged.find(e => e.slug === "gpt-5.5")!;
-    // sol upstream pin is v2 — restored
     expect(sol.multi_agent_version).toBe("v2");
-    // luna upstream pin is v1 — restored from snapshot, NOT stale v2
-    expect(luna.multi_agent_version).toBe("v1");
-    // gpt-5.5 has no upstream pin — cleared (codex flag decides)
-    expect(native.multi_agent_version).toBeUndefined();
+    expect(luna.multi_agent_version).toBe("v2");
+    expect(native.multi_agent_version).toBe("v2");
   });
 
   test("mode default prefers pristine-baseline pins over the bundled snapshot", () => {

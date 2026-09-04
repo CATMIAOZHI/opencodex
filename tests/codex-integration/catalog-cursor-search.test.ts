@@ -36,7 +36,8 @@ describe("routed catalog search advertising", () => {
       { provider: "local", id: "qwen3-coder" },
     ]) as Array<Record<string, unknown>>;
     const routed = entries.find(e => e.slug === "local/qwen3-coder");
-    expect(routed?.tool_mode).toBe("code_mode_only");
+    expect(routed?.tool_mode).toBe("direct");
+    expect(routed?.multi_agent_version).toBe("v2");
     expect(routed?.supports_search_tool).toBe(true);
     expect(routed?.web_search_tool_type).toBe("text_and_image");
   });
@@ -47,7 +48,8 @@ describe("routed catalog search advertising", () => {
     ]) as Array<Record<string, unknown>>;
     const routed = entries.find(e => typeof e.slug === "string" && (e.slug as string).startsWith("cursor/"));
     expect(routed).toBeDefined();
-    expect(routed?.tool_mode).toBe("code_mode_only");
+    expect(routed?.tool_mode).toBe("direct");
+    expect(routed?.multi_agent_version).toBe("v2");
     expect(routed?.supports_search_tool).toBe(true);
     expect(routed?.web_search_tool_type).toBeUndefined();
   });

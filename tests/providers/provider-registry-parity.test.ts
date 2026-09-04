@@ -1129,6 +1129,9 @@ describe("provider registry parity", () => {
     expect(ollamaCloud?.models).not.toContain("gemma4");
     expect(ollamaCloud?.noVisionModels).toContain("qwen3-coder:480b");
     expect(ollamaCloud?.noVisionModels).not.toContain("qwen3-coder");
+    for (const model of ["glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro", "kimi-k3"]) {
+      expect(ollamaCloud?.modelContextWindows?.[model]).toBe(1_048_576);
+    }
   });
 
   test("Fire Pass model data is explicitly frozen pending entitlement proof", () => {

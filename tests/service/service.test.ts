@@ -4069,6 +4069,27 @@ describe("service definitions are not world-readable", () => {
       removeTreeWithRetry(dir);
     }
   });
+
+  test("a failed atomic publish preserves the prior launcher and removes its sibling temporary", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-service-atomic-"));
+    const path = join(dir, "launcher.vbs");
+    const nonce = "publish-failure";
+    const temporary = join(dir, `.launcher.vbs.${process.pid}.${nonce}.tmp`);
+    try {
+      writeFileSync(path, "old-launcher", "utf8");
+      const publishError = Object.assign(new Error("simulated publish collision"), { code: "EBUSY" });
+
+      expect(() => writeServiceDefinitionFile(path, "new-launcher", "utf8", {
+        uuid: () => nonce,
+        rename: () => { throw publishError; },
+      })).toThrow("simulated publish collision");
+
+      expect(readFileSync(path, "utf8")).toBe("old-launcher");
+      expect(existsSync(temporary)).toBe(false);
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
 });
 
 // A pre-promotion audit flagged that this file's proxy-credential write used a soft-failing
