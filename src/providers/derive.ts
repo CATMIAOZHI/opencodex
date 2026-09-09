@@ -486,11 +486,8 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.models && seed.models) prov.models = [...seed.models];
   if (prov.liveModels === undefined && seed.liveModels !== undefined) prov.liveModels = seed.liveModels;
   if (prov.contextWindow === undefined && seed.contextWindow !== undefined) prov.contextWindow = seed.contextWindow;
-  // Fill individual registry keys while preserving every explicit saved value.
-  // A partial persisted map must not suppress metadata added in a later release.
-  if (seed.modelContextWindows) {
-    prov.modelContextWindows = { ...seed.modelContextWindows, ...(prov.modelContextWindows ?? {}) };
-  }
+  // Runtime routing fills missing registry keys without persisting defaults on an unrelated save.
+  if (!prov.modelContextWindows && seed.modelContextWindows) prov.modelContextWindows = { ...seed.modelContextWindows };
   // Per-model fill, not all-or-nothing: an operator who renamed ONE model must still receive
   // labels for the rest, and an existing install must pick up newly seeded rows on enrich.
   if (seed.modelDisplayNames) {
