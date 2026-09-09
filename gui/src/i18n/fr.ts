@@ -4,6 +4,18 @@ import type { TKey } from "./en";
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
+  "usage.daily.title": "Coût par date",
+  "usage.daily.timezone": "Heures en {zone} ; la minute de fin est incluse en entier. Les lignes journalières utilisent les dates locales du proxy.",
+  "usage.daily.start": "Date de début",
+  "usage.daily.end": "Date de fin",
+  "usage.daily.full": "Toutes les dates disponibles",
+  "usage.daily.window": "Dates disponibles : {start} – {end}. Dates locales du proxy et filtres ci-dessus. L’historique disponible contient au plus 366 jours.",
+  "usage.daily.total": "Équivalent au tarif API sur la période (USD)",
+  "usage.daily.note": "Estimation selon les tarifs API configurés, pas une facture. Les requêtes sans tarif ou usage sont exclues ; zéro peut indiquer un usage non tarifé. Un tiret indique un tarif quotidien indisponible.",
+  "usage.daily.invalid": "La date de début doit précéder ou égaler la date de fin.",
+  "usage.daily.date": "Date",
+  "usage.daily.requests": "Requêtes",
+  "usage.daily.amount": "Équivalent au tarif API (USD)",
   "models.pickerOrder.label": "Ordre des modèles",
   "models.pickerOrder.default": "Par défaut",
   "models.pickerOrder.alphabetical": "A–Z par modèle",

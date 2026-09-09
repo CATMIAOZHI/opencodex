@@ -5,6 +5,18 @@ import type { TKey } from "./en";
  * German i18n catalog, generated from en.ts. Must match the `TKey` set (compile-checked).
  */
 export const de: Record<TKey, string> = {
+  "usage.daily.title": "Kosten nach Datum",
+  "usage.daily.timezone": "Zeitauswahl in {zone}; die gesamte Endminute ist enthalten. Tageszeilen verwenden lokale Proxy-Daten.",
+  "usage.daily.start": "Startdatum",
+  "usage.daily.end": "Enddatum",
+  "usage.daily.full": "Alle verfügbaren Daten",
+  "usage.daily.window": "Verfügbar: {start} – {end}. Lokale Daten des Proxys und obige Filter gelten. Der verfügbare Verlauf enthält bis zu 366 Tageswerte.",
+  "usage.daily.total": "API-Listenpreisäquivalent im Zeitraum (USD)",
+  "usage.daily.note": "Schätzung anhand konfigurierter API-Preise, keine Rechnung. Anfragen ohne Preis oder Nutzung sind ausgeschlossen; null kann fehlende bepreisbare Nutzung bedeuten. Ein Strich bedeutet fehlende Tagespreise.",
+  "usage.daily.invalid": "Das Startdatum darf nicht nach dem Enddatum liegen.",
+  "usage.daily.date": "Datum",
+  "usage.daily.requests": "Anfragen",
+  "usage.daily.amount": "API-Listenpreisäquivalent (USD)",
   "models.pickerOrder.label": "Modellreihenfolge",
   "models.pickerOrder.default": "Standard",
   "models.pickerOrder.alphabetical": "A–Z nach Modell",

@@ -4,6 +4,18 @@ import type { TKey } from "./en";
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  "usage.daily.title": "日付別の換算額",
+  "usage.daily.timezone": "時刻は {zone} で指定し、終了時刻の分全体を含みます。日別明細はプロキシのローカル日付を使用します。",
+  "usage.daily.start": "開始日",
+  "usage.daily.end": "終了日",
+  "usage.daily.full": "利用可能な全日付",
+  "usage.daily.window": "対象日付：{start} ～ {end}。プロキシのローカル日付と上のフィルターを使用します。利用可能な履歴は最大 366 日分です。",
+  "usage.daily.total": "選択期間の API 定価換算合計（USD）",
+  "usage.daily.note": "設定済み API 価格による推定で、請求額ではありません。価格や使用量のないリクエストは除外され、ゼロは計算可能な使用量がない場合も含みます。横線は日別価格が未提供であることを示します。",
+  "usage.daily.invalid": "開始日は終了日以前にしてください。",
+  "usage.daily.date": "日付",
+  "usage.daily.requests": "リクエスト数",
+  "usage.daily.amount": "API 定価換算額（USD）",
   "models.pickerOrder.label": "モデル選択順",
   "models.pickerOrder.default": "デフォルト",
   "models.pickerOrder.alphabetical": "モデル名のA–Z順",

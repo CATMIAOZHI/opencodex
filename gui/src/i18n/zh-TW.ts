@@ -2,6 +2,18 @@ import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  "usage.daily.title": "按日期換算",
+  "usage.daily.timezone": "時間選擇使用 {zone} 時區，包含結束時間的整分鐘。每日明細依代理本地日期劃分。",
+  "usage.daily.start": "開始日期",
+  "usage.daily.end": "結束日期",
+  "usage.daily.full": "選擇全部可用日期",
+  "usage.daily.window": "可查詢日期：{start} 至 {end}。使用代理本地日期與上方篩選條件；「可用歷史」最多提供 366 天的每日明細。",
+  "usage.daily.total": "所選日期 API 標價換算合計（美元）",
+  "usage.daily.note": "依已設定的 API 價格估算，並非實際帳單。無價格或用量的請求不計入；零也可能表示沒有可計價用量。橫線表示未提供每日計價。",
+  "usage.daily.invalid": "開始日期不能晚於結束日期。",
+  "usage.daily.date": "日期",
+  "usage.daily.requests": "請求數",
+  "usage.daily.amount": "API 標價換算（美元）",
   "models.pickerOrder.label": "模型選擇順序",
   "models.pickerOrder.default": "預設",
   "models.pickerOrder.alphabetical": "依模型名稱 A–Z",

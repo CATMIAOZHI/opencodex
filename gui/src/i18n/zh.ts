@@ -4,6 +4,18 @@ import type { TKey } from "./en";
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  "usage.daily.title": "按日期折算",
+  "usage.daily.timezone": "时间选择使用 {zone} 时区，包含结束时间的整分钟。每日明细仍按代理本地日期划分。",
+  "usage.daily.start": "开始日期",
+  "usage.daily.end": "结束日期",
+  "usage.daily.full": "选择全部可用日期",
+  "usage.daily.window": "可查询日期：{start} 至 {end}。沿用代理本地日期和上方筛选条件；“可用历史”最多提供 366 天的每日明细。",
+  "usage.daily.total": "所选日期 API 标价折算合计（美元）",
+  "usage.daily.note": "按已配置的 API 价格估算，并非实际账单。无价格或用量的请求不计入；零也可能表示没有可计价用量。横线表示未提供每日计价。",
+  "usage.daily.invalid": "开始日期不能晚于结束日期。",
+  "usage.daily.date": "日期",
+  "usage.daily.requests": "请求数",
+  "usage.daily.amount": "API 标价折算（美元）",
   "models.pickerOrder.label": "模型选择顺序",
   "models.pickerOrder.default": "默认",
   "models.pickerOrder.alphabetical": "按模型名 A–Z",

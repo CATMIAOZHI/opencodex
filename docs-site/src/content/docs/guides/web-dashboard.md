@@ -77,6 +77,24 @@ badge or the version value to read the full value.
 
 ## What you can do
 
+In **Usage → Cost by date**, select an inclusive start/end date to see the API
+list-price equivalent in USD and daily request totals. It defaults to the latest
+day and follows the source and range filters above. To select older dates, choose
+**Available history**; daily detail is limited to the latest 366 days, even when
+the overall history total covers more. Dates use the proxy's local timezone.
+Amounts use the configured pricing estimates, not billing charges; requests
+without prices or usage are excluded. A zero may therefore mean no priced usage.
+A dash means the proxy did not supply daily pricing.
+The model selector narrows both amounts and request counts to a model/provider
+pair. Choose **All models** to restore the full report; date filters still apply.
+Start and end controls also accept hours and minutes, in the browser's displayed
+timezone. Queries filter original record timestamps and include the entire end
+minute (internally an exclusive bound at the next minute). Daily rows retain the
+proxy's local dates. While a time query is loading or has failed, its previous
+amount is hidden. This uses the upstream `since`/`until` query on
+`GET /api/usage` (inclusive epoch milliseconds); the end minute is converted to
+its final millisecond. An active page-level custom window also constrains this report.
+
 | Area | What it does |
 | --- | --- |
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |

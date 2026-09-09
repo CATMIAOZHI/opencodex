@@ -5,6 +5,18 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  "usage.daily.title": "Tarihe göre maliyet",
+  "usage.daily.timezone": "Saat seçimi {zone} dilimini kullanır; bitiş dakikasının tamamı dahildir. Günlük satırlar proxy yerel tarihlerini kullanır.",
+  "usage.daily.start": "Başlangıç tarihi",
+  "usage.daily.end": "Bitiş tarihi",
+  "usage.daily.full": "Kullanılabilir tüm tarihler",
+  "usage.daily.window": "Kullanılabilir tarihler: {start} – {end}. Proxy yerel tarihleri ve yukarıdaki filtreler kullanılır. Geçmiş en fazla 366 günlük kayıt içerir.",
+  "usage.daily.total": "Seçili dönem API liste fiyatı karşılığı (USD)",
+  "usage.daily.note": "Yapılandırılmış API fiyatlarına göre tahmindir, fatura değildir. Fiyatı veya kullanımı olmayan istekler hariçtir; sıfır hesaplanabilir kullanım olmadığını da gösterebilir. Çizgi günlük fiyat bilgisinin bulunmadığını belirtir.",
+  "usage.daily.invalid": "Başlangıç tarihi bitiş tarihinden sonra olamaz.",
+  "usage.daily.date": "Tarih",
+  "usage.daily.requests": "İstekler",
+  "usage.daily.amount": "API liste fiyatı karşılığı (USD)",
   "models.pickerOrder.label": "Model sırası",
   "models.pickerOrder.default": "Varsayılan",
   "models.pickerOrder.alphabetical": "Model adına göre A–Z",

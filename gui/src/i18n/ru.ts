@@ -4,6 +4,18 @@ import type { TKey } from "./en";
  * Russian i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ru: Record<TKey, string> = {
+  "usage.daily.title": "Стоимость по датам",
+  "usage.daily.timezone": "Время задаётся в {zone}; последняя минута включена целиком. Дневные строки используют местные даты прокси.",
+  "usage.daily.start": "Начальная дата",
+  "usage.daily.end": "Конечная дата",
+  "usage.daily.full": "Все доступные даты",
+  "usage.daily.window": "Доступно: {start} – {end}. Используются местные даты прокси и фильтры выше. История содержит не более 366 дневных записей.",
+  "usage.daily.total": "Эквивалент по тарифам API за период (USD)",
+  "usage.daily.note": "Оценка по настроенным тарифам API, не счёт. Запросы без цены или данных об использовании исключены; ноль может означать отсутствие оцениваемого использования. Прочерк означает отсутствие дневной оценки.",
+  "usage.daily.invalid": "Начальная дата должна быть не позже конечной.",
+  "usage.daily.date": "Дата",
+  "usage.daily.requests": "Запросы",
+  "usage.daily.amount": "Эквивалент по тарифам API (USD)",
   "models.pickerOrder.label": "Порядок моделей",
   "models.pickerOrder.default": "По умолчанию",
   "models.pickerOrder.alphabetical": "По имени A–Z",

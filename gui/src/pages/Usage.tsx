@@ -11,6 +11,7 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
+import UsageDailyCosts from "./UsageDailyCosts";
 import { parseUsageTimeRange, type UsageRangeError, type UsageTimeWindow } from "../usage-time-range";
 
 type Range = "all" | "30d" | "7d";
@@ -39,6 +40,7 @@ interface UsageSummaryTotals {
 
 interface UsageDay {
   date: string;
+  estimatedCostUsd?: number;
   requests: number;
   measuredRequests: number;
   reportedRequests: number;
@@ -48,6 +50,7 @@ interface UsageDay {
 
 interface UsageDayModel {
   model: string;
+  estimatedCostUsd?: number;
   provider: string;
   requests: number;
   totalTokens: number;
@@ -691,6 +694,8 @@ function UsageCoveragePanel({
  * Models / Providers / Coverage do not stack into a long scroll.
  */
 function UsageWorkspaceBody({
+  loadCostDays,
+  costScopeKey,
   data,
   heatmap,
   weekBars,
@@ -708,6 +713,8 @@ function UsageWorkspaceBody({
   weekBars: UsageDay[];
   activeDays: number;
   filteredModels: UsageModel[];
+  loadCostDays: (startTime: number, endTime: number, signal: AbortSignal) => Promise<UsageDay[]>;
+  costScopeKey: string;
   modelQuery: string;
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
@@ -727,6 +734,12 @@ function UsageWorkspaceBody({
           <UsageHeatmapPanel range={range} heatmap={heatmap} weekBars={weekBars} locale={locale} t={t} />
         </>
       ) : null,
+    },
+    {
+      id: "daily-cost",
+      label: t("usage.daily.title"),
+      meta: "",
+      body: data ? <UsageDailyCosts key={costScopeKey} days={data.days} loadDays={loadCostDays} /> : null,
     },
     {
       id: "models",
@@ -839,6 +852,19 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
 
   const presetKey = usageCacheKey(apiBase, range, surface, connected, scope, apiKeyId);
   const resourceKey = customWindow ? JSON.stringify([presetKey, since, until]) : presetKey;
+  const loadCostDays = useCallback(async (startTime: number, endTime: number, signal: AbortSignal): Promise<UsageDay[]> => {
+    // The local control includes the entire end minute; upstream uses inclusive milliseconds.
+    const lower = Math.max(startTime, since ?? startTime);
+    const upper = Math.min(endTime - 1, until ?? endTime - 1);
+    if (lower > upper) return [];
+    const query = new URLSearchParams({ range: "all", surface, since: String(lower), until: String(upper) });
+    if (connected && scope === "machine" && apiKeyId) query.set("apiKeyId", apiKeyId);
+    const response = await fetch(`${apiBase}/api/usage?${query}`, { signal });
+    if (!response.ok) throw new Error(`${response.status}`);
+    const result = await response.json() as UsageResponse;
+    if (result.customWindow !== true || result.since !== lower || result.until !== upper) throw new UsageWindowMismatchError();
+    return result.days.filter(day => day.requests > 0);
+  }, [apiBase, surface, connected, scope, apiKeyId, since, until]);
   // Arbitrary custom windows belong only to the subscription-scoped resource store.
   const cached = customWindow ? null : readHeldUsage(apiBase, range, surface, connected, scope, apiKeyId);
   // Range and surface identify different reports, so the key changes with both. That prevents
@@ -1008,6 +1034,8 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             </Notice>
           )}
           <UsageWorkspaceBody
+            loadCostDays={loadCostDays}
+            costScopeKey={resourceKey}
             data={data}
             heatmap={heatmap}
             weekBars={weekBars}
