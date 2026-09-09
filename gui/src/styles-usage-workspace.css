@@ -209,6 +209,13 @@
   color: var(--text-secondary);
 }
 
+.usage-date-controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; }
+.usage-date-controls label { display: grid; gap: 6px; }
+.usage-date-controls input, .usage-date-controls select { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font: inherit; }
+.usage-date-controls label { max-width: 100%; min-width: 0; }
+.usage-date-controls select { max-width: 100%; }
+.usage-date-total strong { font-size: 1.5rem; margin-inline-start: 8px; }
+
 .usage-scope-control {
   display: inline-flex;
   gap: 6px;
