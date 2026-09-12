@@ -1394,18 +1394,13 @@ test("chat-native streaming bounds an oversized unterminated SSE event", async (
     fetch() {
       calls += 1;
       if (calls === 1) {
-        // One unterminated event, fed as repeated chunks so the fixture itself never holds a
-        // single multi-hundred-MiB string in this process; the per-record ceiling is what has to
-        // stop the read, with the upstream stream deliberately left open.
-        const chunk = new Uint8Array(2 * 1024 * 1024).fill(0x78);
-        return new Response(new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("data: "));
-            for (let index = 0; index <= TRANSLATOR_MAX_SSE_EVENT_BYTES / chunk.byteLength; index += 1) {
-              controller.enqueue(chunk);
-            }
-          },
-        }), { headers: { "content-type": "text/event-stream" } });
+        // One unterminated event past the per-record ceiling. A single body string, not a chunked
+        // stream: the chunked form makes the code under test accumulate the same bytes over
+        // thousands of reads and measured ~15-20s versus ~6s here, while this file's other cases
+        // carry only a second or two of headroom under Bun's 5s default.
+        return new Response(`data: ${"x".repeat(TRANSLATOR_MAX_SSE_EVENT_BYTES + 1)}`, {
+          headers: { "content-type": "text/event-stream" },
+        });
       }
       return new Response('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
         headers: { "content-type": "text/event-stream" },

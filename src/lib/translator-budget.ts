@@ -13,6 +13,13 @@
  * slightly different route accounting cannot re-introduce the 413. Raising the constant rather
  * than importing it keeps `translator-budget` a leaf module.
  *
+ * That alignment covers the request-copies accounting for one body. Signature-heavy replays share
+ * the same turn budget through separate multipliers: `src/claude/inbound.ts` retains twice each
+ * encrypted signature it replays, and `src/responses/reasoning-envelope.ts` reserves up to eight
+ * times an already-encoded envelope while decoding it. A body dominated by extended-thinking
+ * signatures can therefore still overflow below the front-door cap — a typed 413, never a
+ * truncated success.
+ *
  * This is also the wall the fork cares about: the command-code adapter decodes NDJSON with no
  * per-record ceiling, so the turn budget is the only bound on that path. One pathological single
  * record (33 MiB, no newline) reserved more than the upstream 32 MiB cap in one `reserveTransient`
