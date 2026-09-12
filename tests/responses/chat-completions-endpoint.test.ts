@@ -1,5 +1,5 @@
 import { waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -659,9 +659,8 @@ test("large image chat-completions request remains within its bounded replay bud
 
 test("chat-completions replay copy admits a body above the former 32 MiB turn limit", async () => {
   // Fork-local raise: the serialized replay body is hard-charged against the turn cap, which now
-  // sits at 3x the front-door body cap, so an image-sized body that used to return 413 must reach
-  // the provider instead. The typed 413 mapping itself stays covered by the mocked-budget handler
-  // tests (tests/responses/reasoning-envelope.test.ts) and the pinned turn-cap cases below.
+  // sits above the front-door body cap, so an image-sized body that used to return 413 must reach
+  // the provider instead.
   const upstream = mockChatUpstream();
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
   const server = startServer(0);
@@ -681,6 +680,45 @@ test("chat-completions replay copy admits a body above the former 32 MiB turn li
     upstream.stop(true);
   }
 });
+
+test("chat-completions translation overflow still maps to a structured 413", async () => {
+  // The body-read 413 is unreachable now that the turn cap sits above the front door, so pin a
+  // small budget and keep the client-visible contract covered: 413 + request_too_large + the
+  // translation_buffer_limit code, as a JSON error rather than a stream or a hang.
+  const { handleChatCompletions } = await import("../../src/server/chat-completions");
+  const budgets = await import("../../src/lib/translator-budget");
+  const createBudget = budgets.createTranslatorBudget;
+  const factory = spyOn(budgets, "createTranslatorBudget").mockImplementation(() => createBudget({ maxTurnBytes: 4096 }));
+  const config = mockConfig("http://127.0.0.1:1/v1");
+  saveConfig(config);
+  try {
+    const response = await handleChatCompletions(
+      new Request("http://localhost/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock/test-model",
+          stream: false,
+          messages: [{ role: "user", content: "x".repeat(8 * 1024) }],
+        }),
+      }),
+      config,
+      { model: "", provider: "" },
+      { requestId: `req_chat_overflow_${Date.now()}`, start: Date.now() },
+    );
+    expect(response.status).toBe(413);
+    expect(response.headers.get("content-type") ?? "").toContain("application/json");
+    expect(await response.json()).toMatchObject({
+      error: {
+        message: "request translation buffer exceeded the safe limit",
+        type: "request_too_large",
+        code: "translation_buffer_limit",
+      },
+    });
+  } finally {
+    factory.mockRestore();
+  }
+}, 30_000);
 
 test("chatCompletionsToResponsesBody maps response_format and rejects unknown types", () => {
   const jsonObject = chatCompletionsToResponsesBody({
@@ -1339,9 +1377,18 @@ test("chat-native streaming bounds an oversized unterminated SSE event", async (
     fetch() {
       calls += 1;
       if (calls === 1) {
-        return new Response(`data: ${"x".repeat(TRANSLATOR_MAX_SSE_EVENT_BYTES + 1)}`, {
-          headers: { "content-type": "text/event-stream" },
-        });
+        // One unterminated event, fed as repeated chunks so the fixture itself never holds a
+        // single multi-hundred-MiB string in this process; the per-record ceiling is what has to
+        // stop the read, with the upstream stream deliberately left open.
+        const chunk = new Uint8Array(2 * 1024 * 1024).fill(0x78);
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("data: "));
+            for (let index = 0; index <= TRANSLATOR_MAX_SSE_EVENT_BYTES / chunk.byteLength; index += 1) {
+              controller.enqueue(chunk);
+            }
+          },
+        }), { headers: { "content-type": "text/event-stream" } });
       }
       return new Response('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
         headers: { "content-type": "text/event-stream" },
@@ -1371,7 +1418,7 @@ test("chat-native streaming bounds an oversized unterminated SSE event", async (
     await server.stop(true);
     upstream.stop(true);
   }
-});
+}, 30_000);
 
 test("chat-native redacts structured provider errors before returning them", async () => {
   const echoedSecret = "Authorization: Bearer opaquecredential123456";
