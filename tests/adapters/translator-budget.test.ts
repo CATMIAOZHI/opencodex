@@ -133,7 +133,7 @@ describe("translator budget", () => {
     }
   });
 
-  test("one one-shot tool call admits exactly 2 MiB and rejects one byte over", () => {
+  test("one one-shot tool call admits exactly one call-argument cap and rejects one byte over", () => {
     const exact = createTranslatorBudget();
     exact.openCall("call");
     exact.chargeRetained(TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, { kind: "tool_args", callId: "call" });
@@ -145,7 +145,7 @@ describe("translator budget", () => {
     over.dispose();
   });
 
-  test("a fragmented tool call through the OpenAI adapter admits exactly 2 MiB and rejects one byte over", async () => {
+  test("a fragmented tool call through the OpenAI adapter admits exactly one call-argument cap and rejects one byte over", async () => {
     const adapter = createOpenAIChatAdapter({
       adapter: "openai-chat",
       baseUrl: "https://example.test/v1",
@@ -206,7 +206,9 @@ describe("translator budget", () => {
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "x" } }] } }] },
       { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
     ].map(value => `data: ${JSON.stringify(value)}\n\n`).join("") + "data: [DONE]\n\n";
-    const budget = createTranslatorBudget();
+    // Pinned explicitly: the scenario is "retained state leaves less than one argument
+    // fragment of headroom", which the production turn cap now sits far above.
+    const budget = createTranslatorBudget({ maxTurnBytes: 32 * 1024 * 1024 });
     budget.chargeRetained(31 * 1024 * 1024, { kind: "retained_collectors" });
     const events: AdapterEvent[] = [];
     try {
@@ -235,7 +237,7 @@ describe("translator budget", () => {
     budget.dispose();
   });
 
-  test("standalone aggregate translator bytes admit exactly 32 MiB and fail one byte over", () => {
+  test("standalone aggregate translator bytes admit exactly one turn cap and fail one byte over", () => {
     const budget = createTranslatorBudget();
     budget.chargeRetained(TRANSLATOR_MAX_TURN_BYTES, { kind: "retained_collectors" });
     expect(budget.snapshot().currentBytes).toBe(TRANSLATOR_MAX_TURN_BYTES);

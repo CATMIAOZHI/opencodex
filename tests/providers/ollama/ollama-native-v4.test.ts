@@ -47,7 +47,9 @@ describe("ollama-native — EOF vs newline accounting parity", () => {
 
   async function run(rec: unknown, eof: boolean) {
     const adapter = createOllamaNativeAdapter(provider());
-    const budget = createTestTranslatorBudget();
+    // Pinned explicitly: these cases are about where the turn cap binds on retained record +
+    // parsed tool arguments, not about where the production cap currently sits.
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 32 * 1024 * 1024 });
     const text = JSON.stringify(rec) + (eof ? "" : "\n");
     const response = new Response(new TextEncoder().encode(text), {
       headers: { "content-type": "application/x-ndjson" },

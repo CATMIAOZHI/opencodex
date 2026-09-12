@@ -1,6 +1,32 @@
-export const TRANSLATOR_MAX_CALL_ARGUMENT_BYTES = 2 * 1024 * 1024;
-export const TRANSLATOR_MAX_TURN_BYTES = 32 * 1024 * 1024;
-export const TRANSLATOR_MAX_SSE_EVENT_BYTES = 32 * 1024 * 1024;
+/**
+ * Fork-local raise from the upstream 32 MiB / 32 MiB / 2 MiB. Every limit below is still a hard
+ * bound that fails the turn with a typed `translation_buffer_limit` error; only the numbers move.
+ *
+ * Turn cap: `3 * MAX_DECOMPRESSED_BODY_BYTES` (`src/server/request-decompress.ts`, 256 MiB). A
+ * translated request body is reserved at three times its size while the UTF-16 JSON string and the
+ * UTF-8 request body coexist (`src/server/claude-messages.ts`,
+ * `reserveTransient(3 * bodyBytes, { kind: "request_copies" })`), so 3x the front-door cap is
+ * exactly the point where any body the proxy accepts can still be translated. Raising the constant
+ * rather than importing it keeps `translator-budget` a leaf module.
+ *
+ * This is also the wall the fork cares about: the command-code adapter decodes NDJSON with no
+ * per-record ceiling, so the turn budget is the only bound on that path. One pathological single
+ * record (33 MiB, no newline) reserved more than the upstream 32 MiB cap in one `reserveTransient`
+ * and ended the turn with `live_transient` after 15-22s of upstream work and zero tokens
+ * delivered; eight such failures were observed, all on command-code/deepseek-v4.1-flash with
+ * `effort=max`.
+ *
+ * SSE event cap: a single event may legitimately carry an inline image, and the decoder accounts
+ * roughly three times the event size while the source line and the decoded value overlap, so
+ * 128 MiB stays reachable under the turn cap (3 * 128 MiB = 384 MiB) and remains the guard that
+ * fires first for an oversized single record instead of the turn cap.
+ *
+ * Call-argument cap: 16 MiB admits a single tool call carrying inline image or file data. A turn
+ * with many interleaved calls is still bounded by the turn cap above.
+ */
+export const TRANSLATOR_MAX_CALL_ARGUMENT_BYTES = 16 * 1024 * 1024;
+export const TRANSLATOR_MAX_TURN_BYTES = 3 * 256 * 1024 * 1024;
+export const TRANSLATOR_MAX_SSE_EVENT_BYTES = 128 * 1024 * 1024;
 export const CURSOR_MAX_CONNECT_FRAME_BYTES = 32 * 1024 * 1024;
 export const CURSOR_MAX_EFFECTIVE_CONNECT_PAYLOAD_BYTES = 16 * 1024 * 1024;
 export const CURSOR_TRANSPORT_MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
