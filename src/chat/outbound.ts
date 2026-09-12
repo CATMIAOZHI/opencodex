@@ -924,7 +924,7 @@ export async function collectChatCompletion(
   let reasoning = "";
   const retainedBytes = { content: 0, refusal: 0, reasoning: 0 };
   const toolCalls = new Map<number, { id: string; name: string; arguments: string; argumentBytes: number }>();
-  // Per-call budget scopes (2 MiB/call enforced by the budget): the map key is the
+  // Per-call budget scopes (the per-call argument cap enforced by the budget): the map key is the
   // wire index, which is stable across deltas and present before the call id.
   const callScope = (index: number) => `chat_collect_${index}`;
   let finishReason = "stop";
