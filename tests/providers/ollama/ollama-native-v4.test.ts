@@ -70,12 +70,13 @@ describe("ollama-native — EOF vs newline accounting parity", () => {
   });
 
   test("non-vacuous near-limit record: aggregate (record + parsed tool args) exceeds the 32 MiB turn cap, while the record itself and each tool argument stay under their individual limits — same budget outcome for both terminators", async () => {
-    // Margins: content 30 MiB + args 1.5 MiB => line ≈ 31.5 MiB (< 32 MiB record/line ceiling;
-    // args 1.5 MiB < the 2 MiB per-call tool-argument limit). While the record is retained, the
-    // parsed tool-argument copy pushes the aggregate translator charge past 32 MiB, so BOTH
-    // terminators must fail with translation_buffer_limit. If the EOF residual were released
-    // before tool translation, the args alone (1.5 MiB) would fit and the EOF case would emit
-    // the tool call — the asymmetry that proves the record stays charged until translated.
+    // Margins: content 30 MiB + args 1.5 MiB => line ≈ 31.5 MiB, under the per-record ceiling and
+    // under the pinned 32 MiB turn cap; args 1.5 MiB stay well under the per-call argument limit.
+    // While the record is retained, the parsed tool-argument copy pushes the aggregate translator
+    // charge past the pinned cap, so BOTH terminators must fail with translation_buffer_limit. If
+    // the EOF residual were released before tool translation, the args alone (1.5 MiB) would fit
+    // and the EOF case would emit the tool call — the asymmetry that proves the record stays
+    // charged until translated.
     const rec = record(30 * 1024 * 1024, 1.5 * 1024 * 1024);
     const nl = await run(rec, false);
     const eof = await run(rec, true);

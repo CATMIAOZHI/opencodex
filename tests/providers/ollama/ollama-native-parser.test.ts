@@ -64,8 +64,9 @@ describe("ollama-native — observer-free streaming", () => {
     // accounting committed old + replacement together, so growth steps double-charged.
     const line = "x".repeat(30 * 1024 * 1024); // 30 MiB: under the assembled-record ceiling...
     // First read: 18 MiB of the giant line (incomplete), second: the remaining ~12 MiB + newline.
-    // Under old+replacement charging this transiently holds 18 + 30 = 48 MiB against the 32 MiB
-    // turn cap and the turn dies, even though the finished record is perfectly valid.
+    // Under old+replacement charging this transiently holds 18 + 30 = 48 MiB against the turn cap
+    // and the turn dies, even though the finished record is perfectly valid. The turn cap is pinned
+    // to the upstream 32 MiB so the case keeps discriminating a double-charging regression.
     const giantLine = `${JSON.stringify({ model: "m", message: { role: "assistant", content: line }, done: true, done_reason: "stop" })}\n`;
     const read1 = giantLine.slice(0, 18 * 1024 * 1024);
     const read2 = giantLine.slice(18 * 1024 * 1024);
@@ -77,7 +78,7 @@ describe("ollama-native — observer-free streaming", () => {
       },
     });
     const adapter = createOllamaNativeAdapter(provider());
-    const budget = createTestTranslatorBudget();
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 32 * 1024 * 1024 });
     const events: AdapterEvent[] = [];
     for await (const event of adapter.parseStream(new Response(body), budget)) events.push(event);
     const text = events.filter(e => e.type === "text_delta").reduce((s, e) => s + (e as { text: string }).text.length, 0);
@@ -88,7 +89,8 @@ describe("ollama-native — observer-free streaming", () => {
   test("one >32 MiB read carrying individually-valid smaller records is accepted", async () => {
     // Nine complete 4 MiB records arrive in ONE transport read of 36 MiB. The old accounting
     // reserved the whole READ before splitting it and rejected at 36 MiB even though every record
-    // was individually valid. The record is the safety unit, not the read.
+    // was individually valid. The record is the safety unit, not the read, and the turn cap is
+    // pinned to the upstream 32 MiB so a whole-read reservation would still be rejected here.
     const line = "y".repeat(4 * 1024 * 1024);
     const frames: string[] = [];
     for (let i = 0; i < 8; i++) {
@@ -104,7 +106,7 @@ describe("ollama-native — observer-free streaming", () => {
     });
 
     const adapter = createOllamaNativeAdapter(provider());
-    const budget = createTestTranslatorBudget();
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 32 * 1024 * 1024 });
     const events: AdapterEvent[] = [];
     for await (const event of adapter.parseStream(new Response(body), budget)) events.push(event);
     const deltas = events.filter(e => e.type === "text_delta");

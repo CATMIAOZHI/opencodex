@@ -1162,3 +1162,21 @@ describe("Command Code provider", () => {
     expect(commandCodeSessionId(parsed())).not.toBe(commandCodeSessionId(parsed()));
   });
 });
+
+describe("Command Code stream record ceiling", () => {
+  test("one 33 MiB NDJSON record no longer ends the turn at the old 32 MiB cap", async () => {
+    // Regression for the observed failures: eight turns died with `live_transient` after 15-22s of
+    // upstream work and zero tokens delivered, because this adapter decodes NDJSON with no
+    // per-record ceiling and the single 33 MiB record reserved past the old 32 MiB turn cap.
+    const text = "x".repeat(33 * 1024 * 1024);
+    const frames = `${JSON.stringify({ type: "text-delta", text })}\n${JSON.stringify({ type: "finish" })}\n`;
+    const budget = createTestTranslatorBudget();
+    const events = await createCommandCodeAdapter(provider).parseResponse(
+      new Response(frames, { headers: { "content-type": "application/x-ndjson" } }),
+      budget,
+    );
+    expect(events.map(event => event.type)).toEqual(["text_delta", "done"]);
+    expect((events[0] as { text: string }).text.length).toBe(text.length);
+    expect(budget.snapshot().overflows).toBe(0);
+  }, 60_000);
+});

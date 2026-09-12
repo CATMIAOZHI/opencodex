@@ -5,6 +5,7 @@ import { createGoogleAdapter } from "../../src/adapters/google";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import {
   TRANSLATOR_MAX_CALL_ARGUMENT_BYTES,
+  TRANSLATOR_MAX_SSE_EVENT_BYTES,
   TRANSLATOR_MAX_TURN_BYTES,
   createTranslatorBudget,
   releaseTranslatedEvent,
@@ -373,3 +374,21 @@ test("production adapter contract rejects omitted translator budgets at typechec
   const valid = Bun.spawnSync(["bun", ...base, "tests/fixtures/translator-budget-required.valid.ts"]);
   expect(valid.exitCode).toBe(0);
 }, SPAWN_BUDGET_MS); // two real tsc child processes ARE the assertion; windows runner measured ~5.5s against Bun's 5s default.
+
+describe("fork-local translation ceilings", () => {
+  test("the turn cap keeps the worst-case request overlap at the front door size", async () => {
+    const { MAX_DECOMPRESSED_BODY_BYTES } = await import("../../src/server/request-decompress");
+    // A translated body costs four times its size before it reaches the wire: retained once as the
+    // translated internal body plus a transient reservation of three times while the UTF-16 string
+    // and the UTF-8 body coexist (src/server/claude-messages.ts). The cap has to stay above that
+    // worst case for a body the front door admits, or the raise is cosmetic for image-heavy turns.
+    expect(TRANSLATOR_MAX_TURN_BYTES).toBeGreaterThanOrEqual(4 * MAX_DECOMPRESSED_BODY_BYTES);
+  });
+
+  test("the per-record SSE guard stays reachable under the turn cap", () => {
+    // The decoder accounts about three times an event while the source line and the decoded value
+    // overlap, so the SSE limit must remain below the turn cap or it stops being the guard that
+    // fires first for a single oversized record.
+    expect(3 * TRANSLATOR_MAX_SSE_EVENT_BYTES).toBeLessThanOrEqual(TRANSLATOR_MAX_TURN_BYTES);
+  });
+});
