@@ -13,7 +13,7 @@ import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../
 import { chatCompletionsUsage } from "../../src/chat/outbound";
 import { parseRequest } from "../../src/responses/parser";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
-import type { TranslatorBudget } from "../../src/lib/translator-budget";
+import { TRANSLATOR_MAX_SSE_EVENT_BYTES, type TranslatorBudget } from "../../src/lib/translator-budget";
 import {
   resetProviderRequestPacingForTest,
   setProviderRequestPacingRuntimeForTest,
@@ -657,10 +657,13 @@ test("large image chat-completions request remains within its bounded replay bud
   }
 });
 
-test("chat-completions replay copy overflow returns JSON 413", async () => {
-  // The serialized replay body is the one retained request copy. A payload above
-  // the 32 MiB turn limit must remain a structured client error.
-  saveConfig(mockConfig("http://127.0.0.1:1/v1"));
+test("chat-completions replay copy admits a body above the former 32 MiB turn limit", async () => {
+  // Fork-local raise: the serialized replay body is hard-charged against the turn cap, which now
+  // sits at 3x the front-door body cap, so an image-sized body that used to return 413 must reach
+  // the provider instead. The typed 413 mapping itself stays covered by the mocked-budget handler
+  // tests (tests/responses/reasoning-envelope.test.ts) and the pinned turn-cap cases below.
+  const upstream = mockChatUpstream();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
@@ -672,16 +675,10 @@ test("chat-completions replay copy overflow returns JSON 413", async () => {
         messages: [{ role: "user", content: "x".repeat(33 * 1024 * 1024) }],
       }),
     });
-    expect(response.status).toBe(413);
-    expect(response.headers.get("content-type") ?? "").toContain("application/json");
-    const json = await response.json() as { error?: { message?: string; type?: string; code?: string } };
-    expect(json.error).toMatchObject({
-      message: "request translation buffer exceeded the safe limit",
-      type: "request_too_large",
-      code: "translation_buffer_limit",
-    });
+    expect(response.status).toBe(200);
   } finally {
     await server.stop(true);
+    upstream.stop(true);
   }
 });
 
@@ -1342,7 +1339,7 @@ test("chat-native streaming bounds an oversized unterminated SSE event", async (
     fetch() {
       calls += 1;
       if (calls === 1) {
-        return new Response(`data: ${"x".repeat(33 * 1024 * 1024)}`, {
+        return new Response(`data: ${"x".repeat(TRANSLATOR_MAX_SSE_EVENT_BYTES + 1)}`, {
           headers: { "content-type": "text/event-stream" },
         });
       }

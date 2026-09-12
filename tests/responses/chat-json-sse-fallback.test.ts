@@ -1,6 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import { handleChatCompletions } from "../../src/server/chat-completions";
-import { createTranslatorBudget, isTranslatorBudgetExceededError, translatorObservedBufferSnapshot } from "../../src/lib/translator-budget";
+import {
+  TRANSLATOR_MAX_CALL_ARGUMENT_BYTES,
+  createTranslatorBudget,
+  isTranslatorBudgetExceededError,
+  translatorObservedBufferSnapshot,
+} from "../../src/lib/translator-budget";
 import type { OcxConfig } from "../../src/types";
 import { responsesJsonToChatCompletion, isChatCompletionsStreamError } from "../../src/chat/outbound";
 import { jsonCompletionSse } from "../../src/server/chat-native-sse";
@@ -248,7 +253,7 @@ test("buffered calls enforce their per-call cap, including an empty upstream ID"
   }
 });
 
-test("JSON-to-SSE rejects a call above 2 MiB without success output or duplicate usage", async () => {
-  await streamFixture([{ type: "function_call", call_id: "large-call", name: "lookup", arguments: JSON.stringify({ text: "x".repeat(2 * 1024 * 1024) }) }],
+test("JSON-to-SSE rejects a call above the call-argument cap without success output or duplicate usage", async () => {
+  await streamFixture([{ type: "function_call", call_id: "large-call", name: "lookup", arguments: JSON.stringify({ text: "x".repeat(TRANSLATOR_MAX_CALL_ARGUMENT_BYTES) }) }],
     "completed", false, "max_output_tokens", { error: true, errorCode: "translation_buffer_limit" });
 });

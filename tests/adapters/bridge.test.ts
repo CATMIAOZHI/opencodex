@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON, setOwnedBudgetAbandonedMsForTests } from "../../src/bridge";
 import {
+  TRANSLATOR_MAX_CALL_ARGUMENT_BYTES,
   createTranslatorBudget,
   resetTranslatorAggregateForTests,
   retainTranslatedEventBatch,
@@ -1423,11 +1424,11 @@ describe("Responses bridge stopReason threading (issue #246)", () => {
 
 describe("buildResponseJSON default budget safety net", () => {
   test("omitting the translator budget is bounded, never unbounded", () => {
-    // A single tool call with arguments above the 2 MiB default per-call cap
-    // must overflow even with NO budget option passed (previously unbounded).
+    // A single tool call with arguments above the default per-call cap must
+    // overflow even with NO budget option passed (previously unbounded).
     const events: AdapterEvent[] = [
       { type: "tool_call_start", id: "call_huge", name: "f" },
-      { type: "tool_call_delta", arguments: "x".repeat(3 * 1024 * 1024) },
+      { type: "tool_call_delta", arguments: "x".repeat(TRANSLATOR_MAX_CALL_ARGUMENT_BYTES + 1) },
       { type: "tool_call_end", id: "call_huge" },
       { type: "done" },
     ];

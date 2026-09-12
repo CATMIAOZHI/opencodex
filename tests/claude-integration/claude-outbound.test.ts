@@ -1219,7 +1219,7 @@ describe("sanitizeWebSearchInput (#381)", () => {
     });
   });
 
-  test("fragmented WebSearch args admit exact 2 MiB and reject one byte over", async () => {
+  test("fragmented WebSearch args admit the exact call-argument limit and reject one byte over", async () => {
     const prefix = "{\"query\":\"";
     const suffix = "\"}";
     const exactArgs = prefix

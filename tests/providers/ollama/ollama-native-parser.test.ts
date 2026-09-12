@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createOllamaNativeAdapter } from "../../../src/adapters/ollama-native";
 import { ollamaNativeChatUrl } from "../../../src/adapters/ollama-native-url";
+import { TRANSLATOR_MAX_SSE_EVENT_BYTES } from "../../../src/lib/translator-budget";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 import type { AdapterEvent } from "../../../src/types";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
@@ -61,7 +62,7 @@ describe("ollama-native — observer-free streaming", () => {
   test("a ~30 MiB valid line split across reads is delivered intact", async () => {
     // The safety bound applies to the assembled RECORD, not to read boundaries. The old
     // accounting committed old + replacement together, so growth steps double-charged.
-    const line = "x".repeat(30 * 1024 * 1024); // 30 MiB: under the 32 MiB record ceiling...
+    const line = "x".repeat(30 * 1024 * 1024); // 30 MiB: under the assembled-record ceiling...
     // First read: 18 MiB of the giant line (incomplete), second: the remaining ~12 MiB + newline.
     // Under old+replacement charging this transiently holds 18 + 30 = 48 MiB against the 32 MiB
     // turn cap and the turn dies, even though the finished record is perfectly valid.
@@ -113,8 +114,8 @@ describe("ollama-native — observer-free streaming", () => {
   });
 
   test("a single NDJSON record over the ceiling fails with the translation buffer limit", async () => {
-    // 33 MiB in ONE record: the record itself exceeds the 32 MiB ceiling and must fail closed.
-    const line = "z".repeat(33 * 1024 * 1024);
+    // ONE record past the per-record ceiling must fail closed rather than be admitted whole.
+    const line = "z".repeat(TRANSLATOR_MAX_SSE_EVENT_BYTES + 1);
     const response = new Response(
       `${JSON.stringify({ model: "m", message: { role: "assistant", content: line }, done: true })}\n`,
       { headers: { "content-type": "application/x-ndjson" } },
