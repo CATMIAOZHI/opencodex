@@ -9,7 +9,60 @@ import {
 } from "../xai-tool-schema";
 import { isPlainObject } from "./internal";
 
-function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
+function withCompletedRequired(schema: Record<string, unknown>): Record<string, unknown> {
+  let changed = false;
+  const updates: Record<string, unknown> = {};
+  const completeSchema = (value: unknown): unknown =>
+    isPlainObject(value) ? withCompletedRequired(value) : value;
+  const completeSchemaArray = (value: unknown): unknown => {
+    if (!Array.isArray(value)) return value;
+    let arrayChanged = false;
+    const completed = value.map(item => {
+      const next = completeSchema(item);
+      arrayChanged ||= next !== item;
+      return next;
+    });
+    return arrayChanged ? completed : value;
+  };
+  const completeSchemaMap = (value: unknown): unknown => {
+    if (!isPlainObject(value)) return value;
+    let mapChanged = false;
+    const completed = Object.fromEntries(Object.entries(value).map(([key, child]) => {
+      const next = completeSchema(child);
+      mapChanged ||= next !== child;
+      return [key, next];
+    }));
+    return mapChanged ? completed : value;
+  };
+  const setCompleted = (key: string, completed: unknown): void => {
+    if (completed === schema[key]) return;
+    updates[key] = completed;
+    changed = true;
+  };
+  for (const key of ["properties", "patternProperties", "dependentSchemas", "dependencies", "$defs", "definitions"]) {
+    setCompleted(key, completeSchemaMap(schema[key]));
+  }
+  for (const key of ["allOf", "anyOf", "oneOf", "prefixItems"]) {
+    setCompleted(key, completeSchemaArray(schema[key]));
+  }
+  for (const key of ["additionalProperties", "additionalItems", "unevaluatedProperties", "unevaluatedItems", "propertyNames", "contains", "not", "if", "then", "else", "items", "contentSchema"]) {
+    const value = schema[key];
+    setCompleted(key, Array.isArray(value) ? completeSchemaArray(value) : completeSchema(value));
+  }
+  const recursivelyCompleted = changed ? { ...schema, ...updates } : schema;
+  if (!isPlainObject(recursivelyCompleted.properties)) return recursivelyCompleted;
+  const propertyNames = Object.keys(recursivelyCompleted.properties);
+  const originalRequired = recursivelyCompleted.required;
+  const required = Array.isArray(originalRequired)
+    ? originalRequired.filter((name): name is string => typeof name === "string") : [];
+  const missing = propertyNames.filter(name => !required.includes(name));
+  if (Array.isArray(originalRequired) && required.length === originalRequired.length && missing.length === 0) {
+    return changed ? recursivelyCompleted : schema;
+  }
+  return { ...recursivelyCompleted, required: [...required, ...missing] };
+}
+
+function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean, strictResponsesToolSchemas: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
   // Runs for every Responses destination, forward auth included: the ChatGPT backend is where
   // the `\p{…}` rejection was observed, and it reaches this function through the same seam.
@@ -19,11 +72,11 @@ function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown
     const parameters = normalizeXaiToolParameters(isPlainObject(source.parameters) ? source.parameters : {});
     return parameters === undefined ? undefined : { ...source, parameters };
   }
-  if (isPlainObject(source.parameters) && source.parameters.type === "object") return source;
-  return {
-    ...source,
-    parameters: { ...(isPlainObject(source.parameters) ? source.parameters : {}), type: "object" },
-  };
+  const originalParameters = isPlainObject(source.parameters) ? source.parameters : {};
+  let parameters = originalParameters.type === "object"
+    ? originalParameters : { ...originalParameters, type: "object" };
+  if (strictResponsesToolSchemas) parameters = withCompletedRequired(parameters);
+  return parameters === originalParameters ? source : { ...source, parameters };
 }
 
 /**
@@ -72,7 +125,7 @@ function reconcileToolChoiceForOmittedTools(
   return body;
 }
 
-export function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown {
+export function normalizeToolSchemas(body: unknown, xaiTarget: boolean, strictResponsesToolSchemas = false): unknown {
   if (!isPlainObject(body)) return body;
 
   const omittedFunctionNames = new Set<string>();
@@ -80,11 +133,19 @@ export function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown
     let changed = false;
     const normalized: unknown[] = [];
     for (const tool of tools) {
-      const fixed = normalizeFunctionToolSchema(tool, xaiTarget);
+      let fixed = normalizeFunctionToolSchema(tool, xaiTarget, strictResponsesToolSchemas);
       if (fixed === undefined) {
         changed = true;
         if (isPlainObject(tool) && typeof tool.name === "string") omittedFunctionNames.add(tool.name);
         continue;
+      }
+      if (strictResponsesToolSchemas && isPlainObject(fixed) && fixed.type === "tool_search" && isPlainObject(fixed.parameters)) {
+        const parameters = withCompletedRequired(fixed.parameters);
+        if (parameters !== fixed.parameters) fixed = { ...fixed, parameters };
+      }
+      if (strictResponsesToolSchemas && isPlainObject(fixed) && fixed.type === "namespace" && Array.isArray(fixed.tools)) {
+        const nested = normalizeTools(fixed.tools);
+        if (nested !== fixed.tools) fixed = { ...fixed, tools: nested };
       }
       if (fixed !== tool) changed = true;
       normalized.push(fixed);

@@ -772,8 +772,14 @@ export function applyDeepSeekV4CodexProfiles(entries: RawEntry[]): RawEntry[] {
 /** Apply the operator's explicit direct-tool/V2 policy to every catalog row. */
 export function applyGlobalDirectV2CodexProfiles(entries: RawEntry[]): RawEntry[] {
   for (const entry of entries) {
+    // Keep the final override field after the V2 marker on a second sync pass.
+    // Otherwise an unchanged foreign row is rewritten solely due to key order.
+    const hadAutoReview = Object.hasOwn(entry, "auto_review_model_override");
+    const autoReview = entry.auto_review_model_override;
+    if (hadAutoReview) delete entry.auto_review_model_override;
     entry.tool_mode = "direct";
     entry.multi_agent_version = "v2";
+    if (hadAutoReview) entry.auto_review_model_override = autoReview;
   }
   return entries;
 }

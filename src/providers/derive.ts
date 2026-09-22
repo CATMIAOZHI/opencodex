@@ -275,6 +275,9 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.requiresAdjacentResponsesToolResults !== undefined
       ? { requiresAdjacentResponsesToolResults: entry.requiresAdjacentResponsesToolResults }
       : {}),
+    ...(entry.strictResponsesToolSchemas !== undefined
+      ? { strictResponsesToolSchemas: entry.strictResponsesToolSchemas }
+      : {}),
     ...(entry.requiresPairedResponsesToolResults !== undefined
       ? { requiresPairedResponsesToolResults: entry.requiresPairedResponsesToolResults }
       : {}),
@@ -560,6 +563,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.statelessResponses === undefined && seed.statelessResponses !== undefined) prov.statelessResponses = seed.statelessResponses;
   if (prov.requiresAdjacentResponsesToolResults === undefined && seed.requiresAdjacentResponsesToolResults !== undefined) {
     prov.requiresAdjacentResponsesToolResults = seed.requiresAdjacentResponsesToolResults;
+  }
+  if (prov.strictResponsesToolSchemas === undefined && seed.strictResponsesToolSchemas !== undefined) {
+    prov.strictResponsesToolSchemas = seed.strictResponsesToolSchemas;
   }
   if (prov.requiresPairedResponsesToolResults === undefined && seed.requiresPairedResponsesToolResults !== undefined) {
     prov.requiresPairedResponsesToolResults = seed.requiresPairedResponsesToolResults;

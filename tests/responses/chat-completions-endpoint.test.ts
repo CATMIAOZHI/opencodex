@@ -672,9 +672,7 @@ test("large image chat-completions request remains within its bounded replay bud
 });
 
 test("chat-completions replay copy admits a body above the former 32 MiB turn limit", async () => {
-  // Fork-local raise: the serialized replay body is hard-charged against the turn cap, which now
-  // sits above the front-door body cap, so an image-sized body that used to return 413 must reach
-  // the provider instead.
+  // The raised turn cap lets an image-sized body reach the provider.
   const upstream = mockChatUpstream();
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
   const server = startServer(0);
@@ -696,9 +694,6 @@ test("chat-completions replay copy admits a body above the former 32 MiB turn li
 });
 
 test("chat-completions translation overflow still maps to a structured 413", async () => {
-  // The body-read 413 is unreachable now that the turn cap sits above the front door, so pin a
-  // small budget and keep the client-visible contract covered: 413 + request_too_large + the
-  // translation_buffer_limit code, as a JSON error rather than a stream or a hang.
   const { handleChatCompletions } = await import("../../src/server/chat-completions");
   const budgets = await import("../../src/lib/translator-budget");
   const createBudget = budgets.createTranslatorBudget;
@@ -706,29 +701,17 @@ test("chat-completions translation overflow still maps to a structured 413", asy
   const config = mockConfig("http://127.0.0.1:1/v1");
   saveConfig(config);
   try {
-    const response = await handleChatCompletions(
-      new Request("http://localhost/v1/chat/completions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          model: "mock/test-model",
-          stream: false,
-          messages: [{ role: "user", content: "x".repeat(8 * 1024) }],
-        }),
-      }),
-      config,
-      { model: "", provider: "" },
-      { requestId: `req_chat_overflow_${Date.now()}`, start: Date.now() },
-    );
+    const body = JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "x".repeat(8 * 1024) }] });
+    const request = new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" }, body });
+    const response = await handleChatCompletions(request, config, { model: "", provider: "" },
+      { requestId: `req_chat_overflow_${Date.now()}`, start: Date.now() });
     expect(response.status).toBe(413);
     expect(response.headers.get("content-type") ?? "").toContain("application/json");
-    expect(await response.json()).toMatchObject({
-      error: {
-        message: "request translation buffer exceeded the safe limit",
-        type: "request_too_large",
-        code: "translation_buffer_limit",
-      },
-    });
+    expect(await response.json()).toMatchObject({ error: {
+      message: "request translation buffer exceeded the safe limit",
+      type: "request_too_large", code: "translation_buffer_limit",
+    } });
   } finally {
     factory.mockRestore();
   }

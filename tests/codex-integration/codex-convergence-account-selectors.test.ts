@@ -475,7 +475,7 @@ test("convergence projects the observed Daybreak row onto its selector and one b
     max_context_window: 272_000,
     auto_compact_token_limit: 244_800,
     comp_hash: "3000",
-    tool_mode: "code_mode_only",
+    tool_mode: "direct",
     use_responses_lite: true,
     supports_parallel_tool_calls: true,
     multi_agent_version: "v2",

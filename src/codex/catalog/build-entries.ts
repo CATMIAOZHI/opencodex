@@ -5,6 +5,8 @@ import { COMBO_NAMESPACE } from "../../combos";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
+  applyDeepSeekV4CodexProfiles,
+  applyGlobalDirectV2CodexProfiles,
   applyMultiAgentMode,
   applyNativeOpenAiContextOverride,
   catalogModelSlug,
@@ -306,10 +308,12 @@ export function buildCatalogEntriesFromObservedState({
       delete entry.prefer_websockets;
     }
   }
-  return applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled, {
-    keepNativeChatGptOnV1,
-    preserveDefaultMultiAgentVersion: isReserveCatalogProjection,
-  });
+  return applyGlobalDirectV2CodexProfiles(applyDeepSeekV4CodexProfiles(
+    applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled, {
+      keepNativeChatGptOnV1,
+      preserveDefaultMultiAgentVersion: isReserveCatalogProjection,
+    }),
+  ));
 }
 
 export function resetCatalogRuntimeStateForTests(): void {
@@ -901,12 +905,14 @@ export function mergeCatalogEntriesFromObservedState({
   // Native enable/disable runs as the LAST pass so the upstream-upgrade branch above can never
   // clobber a hide flag back to list. Bare ids disable every account clone; qualified ids disable
   // only their generated account row.
-  const versionedEntries = applyMultiAgentMode(
-    applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
-    multiAgentMode,
-    multiAgentV2Enabled,
-    { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection, nativeDefaults: nativeMultiAgentDefaults },
-  );
+  const versionedEntries = applyGlobalDirectV2CodexProfiles(applyDeepSeekV4CodexProfiles(
+    applyMultiAgentMode(
+      applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
+      multiAgentMode,
+      multiAgentV2Enabled,
+      { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection, nativeDefaults: nativeMultiAgentDefaults },
+    ),
+  ));
   applyFullModelPickerOrder(versionedEntries, modelPickerOrder);
   for (const entry of versionedEntries) {
     // Templates and account clones must not inherit the native row's overlay marker.

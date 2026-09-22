@@ -336,6 +336,8 @@ export interface OcxProviderConfig {
    * preserved after it, and parallel calls stay together with the reasoning turn that produced them.
    */
   requiresAdjacentResponsesToolResults?: boolean;
+  /** Complete function schema required arrays for strict Responses gateways. */
+  strictResponsesToolSchemas?: boolean;
   /**
    * Responses upstream whose parser also rejects a tool call that has no matching output
    * anywhere in the replayed input, not merely one whose result sits out of order. A call left

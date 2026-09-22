@@ -75,6 +75,7 @@ export const REGISTRY_FIELD_MODEL_ID_ROLES = {
   destinationAliases: NONE,
   statelessResponses: NONE,
   requiresAdjacentResponsesToolResults: NONE,
+  strictResponsesToolSchemas: NONE,
   requiresPairedResponsesToolResults: NONE,
   annotateEmptyToolOutputs: NONE,
   supportsServiceTier: NONE,

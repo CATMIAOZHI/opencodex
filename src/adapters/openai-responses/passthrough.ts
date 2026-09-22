@@ -457,6 +457,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           ),
         ),
         isXaiSchemaTarget(provider),
+        provider.strictResponsesToolSchemas === true,
       );
       const unnormalizedBody = stripDisabledVerbosity(
         stripDisabledReasoningSummaries(

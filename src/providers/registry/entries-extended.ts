@@ -948,7 +948,13 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // Owner-audited exact outage fallback: these current Ollama Cloud GLM-5.3 rows have
     // 1,048,576-token context windows. Live discovery and successful /api/show enrichment keep
     // their existing precedence; these values prevent a failed show from becoming generic.
-    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576 },
+    modelContextWindows: {
+      "glm-5.3": 1_048_576,
+      "glm-5.3-flash": 1_048_576,
+      "glm-5.2": 1_048_576,
+      "deepseek-v4-pro": 1_048_576,
+      "kimi-k3": 1_048_576,
+    },
     noVisionModels: [
       // glm-5.3-flash is absent on purpose: native VLM
       // (docs.z.ai/guides/vlm/glm-5.3-flash), so its images skip the sidecar.

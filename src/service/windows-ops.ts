@@ -1,5 +1,5 @@
-import { chmodSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { chmodSync, lstatSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { win32 } from "node:path";
 import { winswXmlPath } from "../lib/winsw";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
@@ -8,7 +8,7 @@ import { windowsServiceScriptPath } from "./state";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { getConfigDir } from "../config";
 import { OCX_ELEVATED_STAGING_UNREADABLE, runWindowsElevatedScheduledTaskRegistration, WindowsSchtasksError, type StagedWindowsTaskXml } from "../lib/windows-elevation";
 import { defaultWinswEntry, installWinswService, statusWinswRaw, uninstallWinswService, WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
@@ -61,11 +61,45 @@ export function winswListenPort(deps: { readXml?: () => string } = {}): number |
  * over, since before #2107 these files had no hardening at all and a failure here would
  * regress a user who has no credential to protect.
  */
-export function writeServiceDefinitionFile(path: string, content: string, encoding: "utf8" | "utf16le"): void {
-  writeFileSync(path, content, { encoding, mode: 0o600 });
-  try { chmodSync(path, 0o600); } catch { /* superseded by the Windows ACL below */ }
-  if (process.platform === "win32") {
-    hardenSecretPath(path, { required: definitionCarriesCredential(content) });
+export interface ServiceDefinitionWriteDeps {
+  writeFile?: (path: string, content: string, options: { encoding: "utf8" | "utf16le"; mode: number; flag: "wx" }) => void;
+  chmod?: (path: string, mode: number) => void;
+  harden?: (path: string, options: { required: boolean }) => void;
+  rename?: (source: string, destination: string) => void;
+  unlink?: (path: string) => void;
+  exists?: (path: string) => boolean;
+  uuid?: () => string;
+  platform?: NodeJS.Platform;
+}
+
+export function writeServiceDefinitionFile(
+  path: string,
+  content: string,
+  encoding: "utf8" | "utf16le",
+  deps: ServiceDefinitionWriteDeps = {},
+): void {
+  const writeFile = deps.writeFile ?? writeFileSync;
+  const chmod = deps.chmod ?? chmodSync;
+  const harden = deps.harden ?? hardenSecretPath;
+  const rename = deps.rename ?? renameSync;
+  const unlink = deps.unlink ?? unlinkSync;
+  const exists = deps.exists ?? existsSync;
+  const uuid = deps.uuid ?? randomUUID;
+  const platform = deps.platform ?? process.platform;
+  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${uuid()}.tmp`);
+
+  try {
+    writeFile(temporary, content, { encoding, mode: 0o600, flag: "wx" });
+    try { chmod(temporary, 0o600); } catch { /* superseded by the Windows ACL below */ }
+    if (platform === "win32") harden(temporary, { required: definitionCarriesCredential(content) });
+    rename(temporary, path);
+  } catch (error) {
+    let cleanupError: unknown;
+    if (exists(temporary)) {
+      try { unlink(temporary); } catch (failedCleanup) { cleanupError = failedCleanup; }
+    }
+    if (cleanupError) throw new AggregateError([error, cleanupError], `Atomic service definition publish failed: ${path}`);
+    throw error;
   }
 }
 

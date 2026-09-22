@@ -243,6 +243,8 @@ export interface ProviderRegistryEntry {
   supportsOpenAiWebSearchToolFields?: boolean;
   /** Registry default for native Responses custom-tool support. */
   supportsResponsesCustomTools?: boolean;
+  /** Complete required arrays for function-like Responses tools. */
+  strictResponsesToolSchemas?: boolean;
   /** Registry default for exact model service-tier capability; explicit config keys win. */
   modelSupportsServiceTier?: Record<string, boolean>;
   /**
