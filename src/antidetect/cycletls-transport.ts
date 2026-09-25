@@ -27,10 +27,17 @@ export class MimicTransportUnavailableError extends Error {
  *
  * Passing "firefox" selects the no-GREASE branch, so the emitted ClientHello
  * keeps the measured cipher/extension/curve order byte-for-byte and the JA3
- * hash matches. This option value is ONLY the spec selector: the real
- * `User-Agent` HTTP header is always set explicitly in `headers` below and
- * never taken from this constant. (Verified against cycletls 2.0.5 Go source;
- * re-verify on upgrade.)
+ * hash matches. (Verified against cycletls 2.0.5 Go source; re-verify on
+ * upgrade.)
+ *
+ * STRUCTURAL LIMITATION (verified, second-round audit): the SAME option value
+ * is written verbatim to the wire `User-Agent` HTTP header
+ * (`req.Header.Set("user-agent", request.Options.UserAgent)` in the Go
+ * source) — exact JA3 and the real `claude-cli/...` UA are mutually exclusive
+ * with stock cycletls. The `user-agent` entry in `headers` below is therefore
+ * dead: the sidecar overwrites it. Fixing this properly requires replacing or
+ * forking the execution layer so the JA3 selector and the wire UA are
+ * decoupled; see the branch's audit notes before merging.
  */
 const CYCLETLS_GREASE_POLICY_UA = "firefox";
 
@@ -119,6 +126,28 @@ function isStreamLike(v: unknown): v is CycleTLSStreamLike {
     !!v && typeof v === "object" &&
     typeof (v as Record<string, unknown>).on === "function"
   );
+}
+
+/**
+ * Rejects with MimicTransportUnavailableError if `promise` does not settle
+ * within `ms`. The sidecar request itself is not cancellable (Go side keeps
+ * running until its own timeout), so this only frees OUR await — the design
+ * stays fail-open: the caller falls back to native fetch.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new MimicTransportUnavailableError(
+        `mimic transport timed out after ${ms}ms`,
+      ));
+    }, ms);
+    // Don't keep the process alive for a wedged sidecar.
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }
 
 /**
@@ -234,27 +263,36 @@ export async function fetchViaClaudeCodeMimic(
     : undefined;
 
   const isStream = opts.isStream ?? false;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_MIMIC_TIMEOUT_MS;
 
   let upstream: CycleTLSResponseLike;
   try {
-    upstream = await client(input, {
-      headers,
-      body: bodyString,
-      // Streaming stays live; everything else is buffered so transport
-      // failures surface as synthetic errors (fail-open) rather than
-      // truncated bodies.
-      responseType: isStream ? "stream" : "text",
-      ja3: CLAUDE_CODE_JA3_TOKEN,
-      disableGrease: true, // honored on non-JA3 paths; kept for intent
-      userAgent: CYCLETLS_GREASE_POLICY_UA,
-      headerOrder: opts.headerOrder,
-      orderAsProvided: opts.headerOrder !== undefined,
-      timeout: opts.timeoutMs ?? DEFAULT_MIMIC_TIMEOUT_MS,
-      // Pin the measured profile: no H2 upgrade, no TLS1.3 auto-rewrite of
-      // the 771 token (CycleTLS would otherwise rewrite version/curves).
-      forceHTTP1: true,
-      tls13AutoRetry: false,
-    }, method);
+    // JS-side timeout: the sidecar resolves transport failures, but a dead or
+    // wedged Go process leaves this promise unsettled forever — without the
+    // race the request would hang instead of failing open to native fetch.
+    // (The caller's AbortSignal only stops our stream consumption, not the
+    // sidecar; the timeout is the backstop for both.)
+    upstream = await withTimeout(
+      client(input, {
+        headers,
+        body: bodyString,
+        // Streaming stays live; everything else is buffered so transport
+        // failures surface as synthetic errors (fail-open) rather than
+        // truncated bodies.
+        responseType: isStream ? "stream" : "text",
+        ja3: CLAUDE_CODE_JA3_TOKEN,
+        disableGrease: true, // honored on non-JA3 paths; kept for intent
+        userAgent: CYCLETLS_GREASE_POLICY_UA,
+        headerOrder: opts.headerOrder,
+        orderAsProvided: opts.headerOrder !== undefined,
+        timeout: timeoutMs,
+        // Pin the measured profile: no H2 upgrade. tls13AutoRetry is pinned
+        // off so a future default change can't rewrite the 771 token.
+        forceHTTP1: true,
+        tls13AutoRetry: false,
+      }, method),
+      timeoutMs,
+    );
   } catch (err) {
     if (err instanceof MimicTransportUnavailableError) throw err;
     throw new MimicTransportUnavailableError(

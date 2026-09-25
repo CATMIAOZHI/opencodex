@@ -99,6 +99,17 @@ test("transport pins the JA3 profile options (no GREASE, no H2, no token rewrite
   expect((opts["headers"] as Record<string, string>)["user-agent"]).toContain("claude-cli");
 });
 
+test("a wedged sidecar times out instead of hanging forever", async () => {
+  fakeClient(() => new Promise(() => {})); // never settles: dead Go process
+  await expect(
+    fetchViaClaudeCodeMimic(
+      "https://api.anthropic.com/v1/messages",
+      { method: "POST", body: "{}" },
+      { timeoutMs: 50 },
+    ),
+  ).rejects.toBeInstanceOf(MimicTransportUnavailableError);
+});
+
 test("unsupported body types fail open instead of being silently dropped", async () => {
   fakeClient(() => ({ status: 200, headers: {}, data: fakeStream([]) }));
   const form = new FormData();
