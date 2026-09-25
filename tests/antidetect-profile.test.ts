@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   CLAUDE_CODE_CIPHER_SUITES,
   CLAUDE_CODE_CURVES,
   CLAUDE_CODE_EXTENSION_ORDER,
+  CLAUDE_CODE_JA3,
   CLAUDE_CODE_JA3_TOKEN,
   CLAUDE_CODE_POINT_FORMATS,
 } from "../src/antidetect/claude-code-profile";
@@ -31,6 +33,13 @@ test("profile has the expected shape (17 ciphers, 14 extensions, 3 curves)", () 
   expect(CLAUDE_CODE_CURVES).toHaveLength(3);
   // Cipher order is JA3-significant: TLS 1.3 suites first.
   expect(CLAUDE_CODE_CIPHER_SUITES.slice(0, 3)).toEqual([0x1301, 0x1302, 0x1303]);
+});
+
+test("md5 of the JA3 token equals the measured JA3 hash", () => {
+  // Tripwire against accidental token edits: the whole point of the mimic
+  // stack is emitting this exact ClientHello.
+  const digest = createHash("md5").update(CLAUDE_CODE_JA3_TOKEN, "utf8").digest("hex");
+  expect(digest).toBe(CLAUDE_CODE_JA3);
 });
 
 const bearerHeaders = () =>
@@ -67,4 +76,9 @@ test("fingerprintMimic:false disables the stack", () => {
 test("mimic is enabled by default", () => {
   expect(isClaudeCodeMimicEnabled(cfg({}))).toBe(true);
   expect(isClaudeCodeMimicEnabled(cfg(undefined))).toBe(true);
+});
+
+test('string "false" also disables the stack (hand-edited JSON)', () => {
+  const config = cfg({ fingerprintMimic: "false" } as unknown as OcxConfig["claudeCode"]);
+  expect(isClaudeCodeMimicEnabled(config)).toBe(false);
 });

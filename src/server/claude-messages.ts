@@ -388,7 +388,9 @@ async function anthropicNativePassthrough(
     config.connectTimeoutMs ?? 200_000,
     req.signal,
     undefined,
-    mimicFetch ?? fetch,
+    // The mimic pipeline exposes a fetch-shaped function but not the full
+    // `typeof fetch` (no preconnect hint); the cast is at this boundary only.
+    (mimicFetch ?? fetch) as typeof fetch,
   );
   if (result.kind === "timeout") {
     finalize(504, { closeReason: "non_stream" });

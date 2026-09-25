@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import {
   applyClaudeCodeMimicHeaders,
+  setClaudeCodeSessionIdFromBody,
   stripClientFingerprintHeaders,
-  syncClaudeCodeSessionId,
 } from "../src/antidetect/mimic-headers";
 import { CLAUDE_CODE_USER_AGENT } from "../src/antidetect/claude-code-profile";
 
@@ -40,7 +40,8 @@ test("x-client-request-id is minted once and never overwritten", () => {
   const fresh = new Headers();
   applyClaudeCodeMimicHeaders(fresh, { isStream: false });
   const minted = fresh.get("x-client-request-id")!;
-  expect(minted).toMatch(/^[0-9a-f]{32}$/);
+  // Hyphenated, matching sub2api's uuid.NewString() and repo convention.
+  expect(minted).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 
   const existing = new Headers({ "x-client-request-id": "keepme" });
   applyClaudeCodeMimicHeaders(existing, { isStream: false });
@@ -67,22 +68,37 @@ test("strip removes fingerprint headers but keeps auth and betas", () => {
   expect(headers.get("content-type")).toBe("application/json");
 });
 
-test("session id syncs from metadata.user_id", () => {
+test("session id is derived from the body even when the header was stripped", () => {
+  // Pipeline order: stripClientFingerprintHeaders removes any stale value,
+  // then the session is re-derived from metadata.user_id.
   const headers = new Headers({ "x-claude-code-session-id": "stale" });
-  syncClaudeCodeSessionId(headers, JSON.stringify({ metadata: { user_id: "sess-123:extra" } }));
+  stripClientFingerprintHeaders(headers);
+  expect(headers.get("x-claude-code-session-id")).toBeNull();
+  setClaudeCodeSessionIdFromBody(headers, JSON.stringify({ metadata: { user_id: "sess-123:extra" } }));
   expect(headers.get("x-claude-code-session-id")).toBe("sess-123");
 });
 
-test("session id sync is a no-op when either side is absent", () => {
-  const noHeader = new Headers();
-  syncClaudeCodeSessionId(noHeader, JSON.stringify({ metadata: { user_id: "s:1" } }));
-  expect(noHeader.get("x-claude-code-session-id")).toBeNull();
+test("session id set is a no-op when the body carries none", () => {
+  const noBody = new Headers();
+  setClaudeCodeSessionIdFromBody(noBody, JSON.stringify({}));
+  expect(noBody.get("x-claude-code-session-id")).toBeNull();
 
-  const noBody = new Headers({ "x-claude-code-session-id": "keep" });
-  syncClaudeCodeSessionId(noBody, JSON.stringify({}));
-  expect(noBody.get("x-claude-code-session-id")).toBe("keep");
+  const badJson = new Headers();
+  setClaudeCodeSessionIdFromBody(badJson, "not json");
+  expect(badJson.get("x-claude-code-session-id")).toBeNull();
+});
 
-  const badJson = new Headers({ "x-claude-code-session-id": "keep" });
-  syncClaudeCodeSessionId(badJson, "not json");
-  expect(badJson.get("x-claude-code-session-id")).toBe("keep");
+test("full pipeline composition: strip -> apply -> session from body", () => {
+  const headers = new Headers({
+    "user-agent": "curl/8.0",
+    "x-claude-code-session-id": "stale",
+    authorization: "Bearer tok",
+  });
+  const body = JSON.stringify({ metadata: { user_id: "real-session:1" }, stream: false });
+  stripClientFingerprintHeaders(headers);
+  applyClaudeCodeMimicHeaders(headers, { isStream: false });
+  setClaudeCodeSessionIdFromBody(headers, body);
+  expect(headers.get("user-agent")).toBe(CLAUDE_CODE_USER_AGENT);
+  expect(headers.get("x-claude-code-session-id")).toBe("real-session");
+  expect(headers.get("authorization")).toBe("Bearer tok");
 });

@@ -7,16 +7,43 @@
  * Go/uTLS sidecar — the same role sub2api's Go dialer plays, adapted for a
  * TypeScript runtime.
  *
- * Fail-open by design: if the sidecar cannot start (binary missing, download
- * blocked, platform unsupported) every entry point throws
+ * Fail-open by design: any sidecar or transport failure throws
  * MimicTransportUnavailableError and callers MUST fall back to native fetch.
  * A fingerprint feature must never break the request path.
  */
-import { CLAUDE_CODE_JA3_TOKEN, CLAUDE_CODE_USER_AGENT } from "./claude-code-profile";
+import { CLAUDE_CODE_JA3_TOKEN } from "./claude-code-profile";
 
 export class MimicTransportUnavailableError extends Error {
   override readonly name = "MimicTransportUnavailableError";
 }
+
+/**
+ * CycleTLS's JA3 string parser (`StringToSpec` in its Go source) overloads the
+ * `userAgent` option as a GREASE-policy selector: any UA that is not
+ * chrome/firefox falls into the **chrome** branch, which unconditionally
+ * prepends GREASE to the cipher suites, extensions and curves — silently
+ * destroying the target JA3. There is no `disableGrease` knob on the JA3 path
+ * (it only exists on the JA4r path).
+ *
+ * Passing "firefox" selects the no-GREASE branch, so the emitted ClientHello
+ * keeps the measured cipher/extension/curve order byte-for-byte and the JA3
+ * hash matches. This option value is ONLY the spec selector: the real
+ * `User-Agent` HTTP header is always set explicitly in `headers` below and
+ * never taken from this constant. (Verified against cycletls 2.0.5 Go source;
+ * re-verify on upgrade.)
+ */
+const CYCLETLS_GREASE_POLICY_UA = "firefox";
+
+/**
+ * Prefix of every synthetic transport error the CycleTLS JS layer resolves
+ * (not rejects) with — see `parseError` in its Go source. Real upstream HTTP
+ * responses, including error statuses, never carry this prefix: they arrive
+ * with response metadata first and their body through the stream/buffer path.
+ */
+const SYNTHETIC_TRANSPORT_ERROR_PREFIX = "Request returned a Syscall Error:";
+
+/** Default sidecar timeout; the Go side treats 0/undefined as "no timeout". */
+const DEFAULT_MIMIC_TIMEOUT_MS = 120_000;
 
 interface CycleTLSStreamLike {
   on(event: "data", cb: (chunk: unknown) => void): void;
@@ -71,7 +98,7 @@ async function getClient(): Promise<CycleTLSClientLike> {
       }
     })();
     // A failed start must not be cached forever — a later request may succeed
-    // (e.g. transient download failure of the Go binary).
+    // (e.g. transient failure spawning the Go binary).
     clientPromise.catch(() => { clientPromise = undefined; });
   }
   return clientPromise;
@@ -82,6 +109,11 @@ export function resetMimicTransportForTests(): void {
   clientPromise = undefined;
 }
 
+/** For tests: inject a fake sidecar client and skip real initialization. */
+export function setMimicTransportClientForTests(client: CycleTLSClientLike | undefined): void {
+  clientPromise = client ? Promise.resolve(client) : undefined;
+}
+
 function isStreamLike(v: unknown): v is CycleTLSStreamLike {
   return (
     !!v && typeof v === "object" &&
@@ -90,8 +122,24 @@ function isStreamLike(v: unknown): v is CycleTLSStreamLike {
 }
 
 /**
+ * CycleTLS resolves (never rejects) transport failures — TLS handshake
+ * errors, refused connections, timeouts, DNS failures — with a synthetic
+ * response whose `data` is the Go error message. Without this check those
+ * would be proxied to our caller as upstream 4xx/5xx responses instead of
+ * failing open to native fetch.
+ */
+function isSyntheticTransportError(data: unknown): data is string {
+  return typeof data === "string" && data.startsWith(SYNTHETIC_TRANSPORT_ERROR_PREFIX);
+}
+
+/**
  * Bridges an EventEmitter-style byte stream to a Web ReadableStream without
  * assuming it is a node:stream Readable.
+ *
+ * Known limitation: if the sidecar's connection drops mid-body, CycleTLS
+ * closes the stream gracefully with no error signal, so a truncated SSE
+ * stream looks complete. Non-streaming callers use the buffered path below
+ * precisely so truncation surfaces as a synthetic error and fails open.
  */
 function toWebStream(source: CycleTLSStreamLike, signal?: AbortSignal | null): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -104,6 +152,8 @@ function toWebStream(source: CycleTLSStreamLike, signal?: AbortSignal | null): R
         controller.error(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
       };
       signal?.addEventListener("abort", onAbort, { once: true });
+      // Note: aborting only stops our consumption — the Go sidecar request
+      // keeps running until its own timeout. Bounded by timeoutMs, no leak.
       source.on("data", (chunk) => {
         try {
           if (typeof chunk === "string") {
@@ -142,10 +192,16 @@ function toHeaders(raw: Record<string, unknown>): Headers {
 }
 
 export interface MimicFetchOptions {
-  /** Request timeout in ms for the sidecar call. */
+  /** Request timeout in ms for the sidecar call. Default 120_000. */
   timeoutMs?: number;
   /** Preserve the caller's header order on the wire when set. */
   headerOrder?: string[];
+  /**
+   * True for SSE/streaming responses (live stream). False buffers the whole
+   * body so a mid-body transport failure surfaces as a synthetic error and
+   * fails open instead of delivering a truncated stream.
+   */
+  isStream?: boolean;
 }
 
 /**
@@ -165,24 +221,39 @@ export async function fetchViaClaudeCodeMimic(
 
   const method = (init.method ?? "GET").toLowerCase();
   const body = init.body;
+  // The Go side only accepts a string body; anything else would be silently
+  // dropped, so fail open loudly instead of sending a truncated request.
+  if (body !== undefined && body !== null && typeof body !== "string" && !(body instanceof URLSearchParams)) {
+    throw new MimicTransportUnavailableError(
+      `unsupported body type for mimic transport: ${Object.prototype.toString.call(body)}`,
+    );
+  }
   const bodyString =
     typeof body === "string" ? body
     : body instanceof URLSearchParams ? body.toString()
     : undefined;
+
+  const isStream = opts.isStream ?? false;
 
   let upstream: CycleTLSResponseLike;
   try {
     upstream = await client(input, {
       headers,
       body: bodyString,
-      responseType: "stream",
+      // Streaming stays live; everything else is buffered so transport
+      // failures surface as synthetic errors (fail-open) rather than
+      // truncated bodies.
+      responseType: isStream ? "stream" : "text",
       ja3: CLAUDE_CODE_JA3_TOKEN,
-      disableGrease: true,
-      userAgent: CLAUDE_CODE_USER_AGENT,
+      disableGrease: true, // honored on non-JA3 paths; kept for intent
+      userAgent: CYCLETLS_GREASE_POLICY_UA,
       headerOrder: opts.headerOrder,
       orderAsProvided: opts.headerOrder !== undefined,
-      timeout: opts.timeoutMs,
-      forceHTTP1: false,
+      timeout: opts.timeoutMs ?? DEFAULT_MIMIC_TIMEOUT_MS,
+      // Pin the measured profile: no H2 upgrade, no TLS1.3 auto-rewrite of
+      // the 771 token (CycleTLS would otherwise rewrite version/curves).
+      forceHTTP1: true,
+      tls13AutoRetry: false,
     }, method);
   } catch (err) {
     if (err instanceof MimicTransportUnavailableError) throw err;
@@ -191,8 +262,13 @@ export async function fetchViaClaudeCodeMimic(
     );
   }
 
-  // Always stream: works for SSE and buffered bodies alike.
-  const webStream = isStreamLike(upstream.data)
+  // Transport failures resolve (not reject) with a synthetic error payload —
+  // this is what makes fail-open actually work.
+  if (isSyntheticTransportError(upstream.data)) {
+    throw new MimicTransportUnavailableError(`mimic transport failed: ${upstream.data}`);
+  }
+
+  const webStream = isStream && isStreamLike(upstream.data)
     ? toWebStream(upstream.data, init.signal)
     : new ReadableStream<Uint8Array>({
       start(controller) {

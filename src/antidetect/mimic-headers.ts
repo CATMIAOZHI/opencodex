@@ -20,8 +20,10 @@ import {
 export const ANTHROPIC_VERSION = "2023-06-01";
 
 function randomRequestId(): string {
-  // crypto.randomUUID is available in Bun and modern Node.
-  return crypto.randomUUID().replace(/-/g, "");
+  // crypto.randomUUID is available in Bun and modern Node. Kept hyphenated:
+  // sub2api mints uuid.NewString() (hyphenated) and the repo convention
+  // (anthropic.ts, anthropic-executor.ts) is hyphenated as well.
+  return crypto.randomUUID();
 }
 
 export interface MimicHeaderOptions {
@@ -69,12 +71,16 @@ export function applyClaudeCodeMimicHeaders(headers: Headers, opts: MimicHeaderO
 }
 
 /**
- * Syncs X-Claude-Code-Session-Id with the session id carried in the request
+ * Sets X-Claude-Code-Session-Id from the session id carried in the request
  * body's metadata.user_id (format "<session_id>:..."), mirroring the real
- * CLI where header and body always agree. No-op when either side is absent.
+ * CLI where header and body always agree. Any pre-existing (stale or
+ * client-supplied) value is overwritten. No-op when the body carries none.
+ *
+ * This is called AFTER stripClientFingerprintHeaders in the pipeline, so it
+ * must not depend on the header already existing — it derives the value from
+ * the body instead.
  */
-export function syncClaudeCodeSessionId(headers: Headers, bodyJson: string): void {
-  if (!headers.get("x-claude-code-session-id")) return;
+export function setClaudeCodeSessionIdFromBody(headers: Headers, bodyJson: string): void {
   let sessionId = "";
   try {
     const parsed = JSON.parse(bodyJson) as { metadata?: { user_id?: unknown } };

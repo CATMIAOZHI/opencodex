@@ -153,21 +153,3 @@ export const CLAUDE_CODE_FINGERPRINT_HEADER_NAMES = [
   "accept",
 ] as const;
 
-/**
- * Full beta list most resembling the real Claude Code CLI, in CLI order.
- * Used only when we mint the header ourselves; on the passthrough path the
- * inbound client's own anthropic-beta is left verbatim.
- */
-export function claudeCodeMimicryBetas(): string[] {
-  return [
-    "claude-code-20250219",
-    "oauth-2025-04-20",
-    "interleaved-thinking-2025-05-14",
-    "prompt-caching-scope-2025-11-11",
-    "effort-2025-11-24",
-    "context-management-2025-06-27",
-    "thinking-binding-controls-2025-11-13",
-    "mid-conversation-output-config-2026-01-06",
-    "extended-cache-ttl-2025-04-11",
-  ];
-}

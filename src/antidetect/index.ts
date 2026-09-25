@@ -5,7 +5,8 @@
  *   1. normalizeDatelineBody — erase steganographic dateline variants
  *   2. stripClientFingerprintHeaders + applyClaudeCodeMimicHeaders — force the
  *      measured CLI identity headers, never passthrough the client's
- *   3. syncClaudeCodeSessionId — header/body session agreement
+ *   3. setClaudeCodeSessionIdFromBody — header/body session agreement
+ *      (derived from the body; the strip in step 2 removes any stale value)
  *   4. fetchViaClaudeCodeMimic — TLS handshake with the copied ClientHello
  *      profile via the CycleTLS sidecar (fail-open to native fetch)
  *
@@ -17,8 +18,8 @@ import type { OcxConfig } from "../types";
 import { normalizeDatelineBody } from "./dateline";
 import {
   applyClaudeCodeMimicHeaders,
+  setClaudeCodeSessionIdFromBody,
   stripClientFingerprintHeaders,
-  syncClaudeCodeSessionId,
 } from "./mimic-headers";
 import {
   MimicTransportUnavailableError,
@@ -28,14 +29,17 @@ import {
 export { normalizeDatelineBody } from "./dateline";
 export {
   applyClaudeCodeMimicHeaders,
+  setClaudeCodeSessionIdFromBody,
   stripClientFingerprintHeaders,
-  syncClaudeCodeSessionId,
 } from "./mimic-headers";
 export { MimicTransportUnavailableError } from "./cycletls-transport";
 
 /** Kill switch: `claudeCode.fingerprintMimic: false` disables the whole stack. */
 export function isClaudeCodeMimicEnabled(config: OcxConfig): boolean {
-  return config.claudeCode?.fingerprintMimic !== false;
+  // Config is JSON: tolerate the string form users hand-write as "false",
+  // even though the type is boolean.
+  const raw: unknown = config.claudeCode?.fingerprintMimic;
+  return raw !== false && raw !== "false";
 }
 
 function isAnthropicDefaultHost(url: string): boolean {
@@ -104,6 +108,17 @@ const MIMIC_HEADER_ORDER = [
 ];
 
 /**
+ * The fetch-shaped function the mimic pipeline exposes. Deliberately NOT
+ * `typeof fetch`: we don't implement the `preconnect` hint API, and claiming
+ * the full type would be dishonest. Callers that need `typeof fetch` cast at
+ * the boundary (see claude-messages.ts).
+ */
+export type MimicFetchFn = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+/**
  * Builds a fetch-compatible function implementing the mimic pipeline, or
  * returns null when the request should stay on the native stack.
  * The returned function fails open: TLS-mimic transport errors fall back to
@@ -113,10 +128,10 @@ export function createClaudeCodeMimicFetch(
   url: string,
   headers: Headers,
   config: OcxConfig,
-): typeof fetch | null {
+): MimicFetchFn | null {
   if (!shouldMimicClaudeCodeUpstream(url, headers, config)) return null;
 
-  const mimicFetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+  const mimicFetch: MimicFetchFn = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
     const target =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
@@ -126,12 +141,15 @@ export function createClaudeCodeMimicFetch(
       const normalized = normalizeDatelineBody(bodyString);
       if (normalized.changed) bodyString = normalized.body;
     }
+    const isStream = isStreamBody(bodyString);
 
     // 2–3. Header mimicry on a copy (never mutate the caller's Headers).
     const outHeaders = new Headers(init.headers);
     stripClientFingerprintHeaders(outHeaders);
-    applyClaudeCodeMimicHeaders(outHeaders, { isStream: isStreamBody(bodyString) });
-    if (bodyString) syncClaudeCodeSessionId(outHeaders, bodyString);
+    applyClaudeCodeMimicHeaders(outHeaders, { isStream });
+    // The strip above removes any client-supplied session id; re-derive it
+    // from the request body so header and body agree (the CLI binds them).
+    if (bodyString) setClaudeCodeSessionIdFromBody(outHeaders, bodyString);
 
     const headerOrder = [
       ...MIMIC_HEADER_ORDER,
@@ -142,7 +160,11 @@ export function createClaudeCodeMimicFetch(
 
     // 4. TLS-mimicked transport, fail-open to native fetch.
     try {
-      return await fetchViaClaudeCodeMimic(target, mimicInit, { headerOrder });
+      return await fetchViaClaudeCodeMimic(target, mimicInit, {
+        headerOrder,
+        isStream,
+        timeoutMs: config.connectTimeoutMs,
+      });
     } catch (err) {
       if (err instanceof MimicTransportUnavailableError) {
         return fetch(target, mimicInit);
@@ -151,7 +173,5 @@ export function createClaudeCodeMimicFetch(
     }
   };
 
-  // typeof fetch carries the preconnect hint API; a no-op keeps the structural
-  // type without pretending to implement connection prewarming.
-  return Object.assign(mimicFetch, { preconnect: () => {} });
+  return mimicFetch;
 }
