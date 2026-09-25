@@ -164,6 +164,7 @@ export function createClaudeCodeMimicFetch(
         headerOrder,
         isStream,
         timeoutMs: config.connectTimeoutMs,
+        sidecarPath: config.claudeCode?.mimicSidecarPath,
       });
     } catch (err) {
       if (err instanceof MimicTransportUnavailableError) {

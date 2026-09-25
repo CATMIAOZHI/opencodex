@@ -11,6 +11,8 @@
  * MimicTransportUnavailableError and callers MUST fall back to native fetch.
  * A fingerprint feature must never break the request path.
  */
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { CLAUDE_CODE_JA3_TOKEN } from "./claude-code-profile";
 
 export class MimicTransportUnavailableError extends Error {
@@ -30,14 +32,16 @@ export class MimicTransportUnavailableError extends Error {
  * hash matches. (Verified against cycletls 2.0.5 Go source; re-verify on
  * upgrade.)
  *
- * STRUCTURAL LIMITATION (verified, second-round audit): the SAME option value
- * is written verbatim to the wire `User-Agent` HTTP header
- * (`req.Header.Set("user-agent", request.Options.UserAgent)` in the Go
- * source) — exact JA3 and the real `claude-cli/...` UA are mutually exclusive
- * with stock cycletls. The `user-agent` entry in `headers` below is therefore
- * dead: the sidecar overwrites it. Fixing this properly requires replacing or
- * forking the execution layer so the JA3 selector and the wire UA are
- * decoupled; see the branch's audit notes before merging.
+ * DECOUPLING (patched sidecar): stock CycleTLS writes this same option value
+ * verbatim to the wire `User-Agent` header, which made exact JA3 and the real
+ * `claude-cli/...` UA structurally mutually exclusive. The bundled patched
+ * sidecar (resources/cycletls-patched, built by
+ * scripts/build-mimic-sidecar.sh) keeps `userAgent` as the TLS fingerprint
+ * selector / fallback UA but no longer clobbers an explicitly provided
+ * User-Agent header — so the wire carries the real CLI UA while the
+ * ClientHello keeps the exact JA3. When the patched binary is absent (or
+ * `mimicSidecarPath` points elsewhere) the stock binary is used and the old
+ * limitation applies: wire UA becomes "firefox".
  */
 const CYCLETLS_GREASE_POLICY_UA = "firefox";
 
@@ -76,8 +80,10 @@ let clientPromise: Promise<CycleTLSClientLike> | undefined;
  * Lazily starts the CycleTLS sidecar (dynamic import: the `cycletls`
  * dependency stays off the startup path). autoExit ties the Go child process
  * to our own lifetime so no shutdown-hook wiring is needed.
+ * The client is a singleton: the sidecar path from the first successful init
+ * wins for the process lifetime.
  */
-async function getClient(): Promise<CycleTLSClientLike> {
+async function getClient(sidecarPath?: string): Promise<CycleTLSClientLike> {
   if (!clientPromise) {
     clientPromise = (async () => {
       let initCycleTLS: (opts?: Record<string, unknown>) => Promise<CycleTLSClientLike>;
@@ -96,8 +102,15 @@ async function getClient(): Promise<CycleTLSClientLike> {
       }
       try {
         // debug=false keeps the sidecar quiet; a random free port is chosen
-        // when `port` is omitted.
-        return await initCycleTLS({ debug: false, autoExit: true });
+        // when `port` is omitted. executablePath selects the patched sidecar
+        // (decoupled JA3 selector / wire UA) when available; omitted it falls
+        // back to the stock npm-shipped binary.
+        const executablePath = resolveMimicSidecarPath(sidecarPath);
+        return await initCycleTLS(
+          executablePath
+            ? { debug: false, autoExit: true, executablePath }
+            : { debug: false, autoExit: true },
+        );
       } catch (err) {
         throw new MimicTransportUnavailableError(
           `cycletls sidecar failed to start: ${err instanceof Error ? err.message : String(err)}`,
@@ -231,6 +244,36 @@ export interface MimicFetchOptions {
    * fails open instead of delivering a truncated stream.
    */
   isStream?: boolean;
+  /**
+   * Path to the CycleTLS sidecar binary. When set (or when the bundled
+   * patched binary exists), it is passed as `executablePath` so the patched
+   * sidecar — which decouples the JA3 selector from the wire User-Agent —
+   * is used instead of the stock npm-shipped binary.
+   */
+  sidecarPath?: string;
+}
+
+/**
+ * Resolve which sidecar binary to spawn:
+ * 1. explicit `sidecarPath` (config `claudeCode.mimicSidecarPath`),
+ * 2. the bundled patched binary for this platform
+ *    (resources/cycletls-patched/cycletls-<platform>-<arch>),
+ * 3. undefined — the stock npm-shipped binary (known UA limitation).
+ * A missing explicit path is NOT an error: it fails open to (2)/(3), and a
+ * sidecar that fails to start fails open to native fetch downstream.
+ */
+export function resolveMimicSidecarPath(explicitPath?: string): string | undefined {
+  if (explicitPath && existsSync(explicitPath)) return explicitPath;
+  const bundled = join(
+    import.meta.dir,
+    "..",
+    "..",
+    "resources",
+    "cycletls-patched",
+    `cycletls-${process.platform}-${process.arch}`,
+  );
+  if (existsSync(bundled)) return bundled;
+  return undefined;
 }
 
 /**
@@ -243,7 +286,7 @@ export async function fetchViaClaudeCodeMimic(
   init: RequestInit,
   opts: MimicFetchOptions = {},
 ): Promise<Response> {
-  const client = await getClient(); // throws MimicTransportUnavailableError
+  const client = await getClient(opts.sidecarPath); // throws MimicTransportUnavailableError
   const headers: Record<string, string> = {};
   const src = new Headers(init.headers);
   src.forEach((value, key) => { headers[key] = value; });

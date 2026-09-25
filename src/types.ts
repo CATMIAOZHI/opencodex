@@ -452,6 +452,14 @@ export interface OcxClaudeCodeConfig {
    */
   fingerprintMimic?: boolean;
   /**
+   * Explicit path to the CycleTLS sidecar binary for the fingerprint mimicry.
+   * When unset, the bundled patched binary
+   * (resources/cycletls-patched/cycletls-<platform>-<arch>) is used when
+   * present, otherwise the stock npm-shipped binary. A missing or
+   * non-starting binary fails open to native fetch.
+   */
+  mimicSidecarPath?: string;
+  /**
    * Native passthrough body inactivity budget in SECONDS — raw upstream-byte silence
    * while a read is pending, NOT total duration (slow-but-alive streams never trip it;
    * devlog 260716_passthrough_followups/010). Default 90. Min 1. Exactly 0 disables;

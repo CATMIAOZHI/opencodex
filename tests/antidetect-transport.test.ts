@@ -167,3 +167,27 @@ test("pipeline derives the session header from the body after stripping", async 
   });
   expect(sentHeaders["x-claude-code-session-id"]).toBe("real-session");
 });
+
+test("resolveMimicSidecarPath prefers an explicit existing path", async () => {
+  const { resolveMimicSidecarPath } = await import("../src/antidetect/cycletls-transport");
+  const tmp = `${import.meta.dir}/../resources/cycletls-patched/cycletls-linux-x64`;
+  // Use a temp file so the test does not depend on the bundled binary.
+  const { writeFileSync, unlinkSync } = await import("node:fs");
+  const probe = `${tmp}.probe`;
+  writeFileSync(probe, "x");
+  try {
+    expect(resolveMimicSidecarPath(probe)).toBe(probe);
+  } finally {
+    unlinkSync(probe);
+  }
+});
+
+test("resolveMimicSidecarPath falls back to bundled binary or undefined", async () => {
+  const { resolveMimicSidecarPath } = await import("../src/antidetect/cycletls-transport");
+  const { existsSync } = await import("node:fs");
+  for (const p of [resolveMimicSidecarPath(), resolveMimicSidecarPath("/nonexistent/sidecar")]) {
+    if (p === undefined) continue; // platform without a bundled binary: stock fallback
+    expect(p.endsWith(`cycletls-${process.platform}-${process.arch}`)).toBe(true);
+    expect(existsSync(p)).toBe(true);
+  }
+});
