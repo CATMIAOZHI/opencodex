@@ -444,6 +444,14 @@ export interface OcxClaudeCodeConfig {
   /** Upstream for the native passthrough (tests/enterprise gateways). Default: https://api.anthropic.com */
   anthropicBaseUrl?: string;
   /**
+   * Claude Code TLS/header fingerprint mimicry (src/antidetect) on the
+   * subscription-OAuth native passthrough: JA3-profiled TLS handshake via the
+   * CycleTLS sidecar, forced CLI identity headers, and steganographic
+   * dateline normalization. Fails open to native fetch when the sidecar is
+   * unavailable. Default: true. Set false to disable.
+   */
+  fingerprintMimic?: boolean;
+  /**
    * Native passthrough body inactivity budget in SECONDS — raw upstream-byte silence
    * while a read is pending, NOT total duration (slow-but-alive streams never trip it;
    * devlog 260716_passthrough_followups/010). Default 90. Min 1. Exactly 0 disables;

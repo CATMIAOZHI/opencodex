@@ -25,6 +25,7 @@ import {
   responsesSseToAnthropicSse,
 } from "../claude/outbound";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
+import { createClaudeCodeMimicFetch } from "../antidetect/index";
 import { estimateTokens } from "../lib/token-estimate";
 import { NoEligiblePolicyCandidateError, routeModel } from "../router";
 import { evidenceFromBody } from "../routing/request-evidence";
@@ -374,11 +375,20 @@ async function anthropicNativePassthrough(
   });
   headers.set("content-type", "application/json");
 
+  const bodyString = JSON.stringify(body);
+  // Subscription-OAuth traffic to api.anthropic.com goes through the Claude
+  // Code mimic pipeline (TLS fingerprint + CLI identity headers + dateline
+  // normalization); everything else stays on native fetch. The mimic fetch
+  // fails open, so this never breaks the passthrough contract.
+  const upstreamUrl = `${base}${pathname}${search}`;
+  const mimicFetch = createClaudeCodeMimicFetch(upstreamUrl, headers, config);
   const result = await fetchWithHeaderDeadline(
-    `${base}${pathname}${search}`,
-    { method: "POST", headers, body: JSON.stringify(body) },
+    upstreamUrl,
+    { method: "POST", headers, body: bodyString },
     config.connectTimeoutMs ?? 200_000,
     req.signal,
+    undefined,
+    mimicFetch ?? fetch,
   );
   if (result.kind === "timeout") {
     finalize(504, { closeReason: "non_stream" });
