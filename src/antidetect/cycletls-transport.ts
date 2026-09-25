@@ -46,12 +46,22 @@ export class MimicTransportUnavailableError extends Error {
 const CYCLETLS_GREASE_POLICY_UA = "firefox";
 
 /**
- * Prefix of every synthetic transport error the CycleTLS JS layer resolves
- * (not rejects) with — see `parseError` in its Go source. Real upstream HTTP
- * responses, including error statuses, never carry this prefix: they arrive
- * with response metadata first and their body through the stream/buffer path.
+ * Prefixes of synthetic transport errors the CycleTLS layers resolve (not
+ * reject) with. Real upstream HTTP responses, including error statuses, never
+ * carry these: they arrive with response metadata first and their body
+ * through the stream/buffer path.
+ *
+ * Two forms exist in the Go source (`cycletls/errors.go` `createErrorMessage`):
+ * - "Request returned a Syscall Error:" — handshake/dial/DNS failures, and
+ *   body-phase timeouts (both get the "-> \n" suffix treatment);
+ * - "Request timeout: deadline exceeded" — header-phase client timeouts, no
+ *   prefix. Missing this second form once let a transport timeout masquerade
+ *   as a real upstream 408 instead of failing open.
  */
-const SYNTHETIC_TRANSPORT_ERROR_PREFIX = "Request returned a Syscall Error:";
+const SYNTHETIC_TRANSPORT_ERROR_PREFIXES = [
+  "Request returned a Syscall Error:",
+  "Request timeout: deadline exceeded",
+] as const;
 
 /** Default sidecar timeout; the Go side treats 0/undefined as "no timeout". */
 const DEFAULT_MIMIC_TIMEOUT_MS = 120_000;
@@ -75,6 +85,9 @@ type CycleTLSClientLike = (
 ) => Promise<CycleTLSResponseLike>;
 
 let clientPromise: Promise<CycleTLSClientLike> | undefined;
+
+/** One-time warning when degrading to the stock binary (risk-relevant). */
+let warnedStockFallback = false;
 
 /**
  * Lazily starts the CycleTLS sidecar (dynamic import: the `cycletls`
@@ -106,6 +119,16 @@ async function getClient(sidecarPath?: string): Promise<CycleTLSClientLike> {
         // (decoupled JA3 selector / wire UA) when available; omitted it falls
         // back to the stock npm-shipped binary.
         const executablePath = resolveMimicSidecarPath(sidecarPath);
+        if (executablePath === undefined && !warnedStockFallback) {
+          warnedStockFallback = true;
+          console.warn(
+            "[antidetect] no patched sidecar found — falling back to the stock " +
+              'cycletls binary, whose wire User-Agent will be "firefox" instead of ' +
+              "claude-cli/... (exact JA3 + wrong UA is easier to flag than no " +
+              "mimicry). Set claudeCode.mimicSidecarPath or ship " +
+              "resources/cycletls-patched/cycletls-<platform>-<arch>.",
+          );
+        }
         return await initCycleTLS(
           executablePath
             ? { debug: false, autoExit: true, executablePath }
@@ -171,7 +194,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * failing open to native fetch.
  */
 function isSyntheticTransportError(data: unknown): data is string {
-  return typeof data === "string" && data.startsWith(SYNTHETIC_TRANSPORT_ERROR_PREFIX);
+  return (
+    typeof data === "string" &&
+    SYNTHETIC_TRANSPORT_ERROR_PREFIXES.some((p) => data.startsWith(p))
+  );
 }
 
 /**
@@ -286,7 +312,14 @@ export async function fetchViaClaudeCodeMimic(
   init: RequestInit,
   opts: MimicFetchOptions = {},
 ): Promise<Response> {
-  const client = await getClient(opts.sidecarPath); // throws MimicTransportUnavailableError
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_MIMIC_TIMEOUT_MS;
+  // getClient itself is wrapped: a corrupt sidecar binary can leave the spawn
+  // unsettled for ~10-20s, and without this bound every request would pay
+  // that latency before failing open.
+  const client = await withTimeout(
+    getClient(opts.sidecarPath),
+    timeoutMs,
+  ); // throws MimicTransportUnavailableError
   const headers: Record<string, string> = {};
   const src = new Headers(init.headers);
   src.forEach((value, key) => { headers[key] = value; });
@@ -306,7 +339,6 @@ export async function fetchViaClaudeCodeMimic(
     : undefined;
 
   const isStream = opts.isStream ?? false;
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_MIMIC_TIMEOUT_MS;
 
   let upstream: CycleTLSResponseLike;
   try {
@@ -328,7 +360,11 @@ export async function fetchViaClaudeCodeMimic(
         userAgent: CYCLETLS_GREASE_POLICY_UA,
         headerOrder: opts.headerOrder,
         orderAsProvided: opts.headerOrder !== undefined,
-        timeout: timeoutMs,
+        // The Go side interprets `timeout` as SECONDS (cycletls README:
+        // "Amount of seconds before request timeout"). Passing ms here would
+        // silently turn 120_000 into ~33h, leaving the JS race as the only
+        // real backstop.
+        timeout: Math.max(1, Math.ceil(timeoutMs / 1000)),
         // Pin the measured profile: no H2 upgrade. tls13AutoRetry is pinned
         // off so a future default change can't rewrite the 771 token.
         forceHTTP1: true,

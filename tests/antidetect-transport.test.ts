@@ -191,3 +191,31 @@ test("resolveMimicSidecarPath falls back to bundled binary or undefined", async 
     expect(existsSync(p)).toBe(true);
   }
 });
+
+test("Go header-phase timeout form is also a synthetic error (fail-open)", async () => {
+  // cycletls Go errors.go: op == "timeout" produces this WITHOUT the
+  // "Request returned a Syscall Error:" prefix.
+  fakeClient(() => ({
+    status: 408,
+    headers: {},
+    data: "Request timeout: deadline exceeded-> \ncontext deadline exceeded",
+  }));
+  await expect(
+    fetchViaClaudeCodeMimic("https://api.anthropic.com/v1/messages", { method: "POST", body: "{}" }),
+  ).rejects.toThrow(MimicTransportUnavailableError);
+});
+
+test("sidecar timeout option is passed in seconds, not ms", async () => {
+  let sentTimeout: unknown;
+  fakeClient((call) => {
+    sentTimeout = call.options["timeout"];
+    return { status: 200, headers: {}, data: "{}" };
+  });
+  await fetchViaClaudeCodeMimic(
+    "https://api.anthropic.com/v1/messages",
+    { method: "POST", body: "{}" },
+    { timeoutMs: 120_000 },
+  );
+  // Go interprets timeout as seconds; 120_000ms must become 120, not 120_000 (~33h).
+  expect(sentTimeout).toBe(120);
+});
