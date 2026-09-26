@@ -105,18 +105,102 @@ export const CLAUDE_CODE_JA3_TOKEN =
   "0";
 
 /**
- * User-Agent we claim on the mimic path. Kept identical to the UA opencodex
- * already uses for Claude quota probes (src/providers/quota.ts) so the whole
- * stack tells one story. Bump together with the TLS profile when the real CLI
- * moves.
+ * User-Agent we claim on the mimic path. Aligned with sub2api's current
+ * constants (CLICurrentVersion = "2.1.258"); the Stainless/Node tuple below
+ * is aligned with sub2api's current constants too. These values are each
+ * confirmed in sub2api's source, but there is no evidence the 2.1.81 header
+ * capture and the 2.1.258 version constant came from the same capture --
+ * treat them as separately-sourced alignment points, not one measured set.
+ * (opencodex's quota probes in src/providers/quota.ts still use 2.1.63 --
+ * bumping those is a separate, upstream-scoped decision.)
  */
-export const CLAUDE_CODE_USER_AGENT = "claude-cli/2.1.63 (external, cli)";
+export const CLAUDE_CODE_USER_AGENT = "claude-cli/2.1.258 (external, cli)";
+
+/**
+ * Exact wire order of request headers sent by the real Claude Code CLI,
+ * captured from HTTPS traffic to api.anthropic.com and mirrored from
+ * sub2api's `headerWireOrder` (backend/internal/service/header_util.go).
+ * "Host" is not in sub2api's list (their Go server parses it into req.Host)
+ * but Node's HTTP client writes it first on the wire, so it leads here.
+ * Everything after Host follows the capture's sequence verbatim, including
+ * the content-length / x-stainless-helper-method tail; per-entry casing
+ * follows sub2api's headerWireCasing (e.g. "Accept-Encoding" here vs
+ * lowercase "accept-encoding" in their order list -- order matching is
+ * case-insensitive, so placement is unaffected).
+ */
+export const CLAUDE_CODE_HEADER_WIRE_ORDER: string[] = [
+  "Host",
+  "Accept",
+  "X-Stainless-Retry-Count",
+  "X-Stainless-Timeout",
+  "X-Stainless-Lang",
+  "X-Stainless-Package-Version",
+  "X-Stainless-OS",
+  "X-Stainless-Arch",
+  "X-Stainless-Runtime",
+  "X-Stainless-Runtime-Version",
+  "anthropic-dangerous-direct-browser-access",
+  "anthropic-version",
+  "authorization",
+  "x-app",
+  "User-Agent",
+  "X-Claude-Code-Session-Id",
+  "content-type",
+  "anthropic-beta",
+  "x-client-request-id",
+  "accept-language",
+  "sec-fetch-mode",
+  "Accept-Encoding",
+  "content-length",
+  "x-stainless-helper-method",
+];
+
+/**
+ * Exact wire casing per header name (lowercase key -> wire spelling),
+ * mirrored from sub2api's `headerWireCasing` (same capture as above).
+ * Note the mixed casing: X-Stainless-* and a few others are Title-Case,
+ * while x-app / anthropic-* / authorization / content-type /
+ * x-client-request-id / x-stainless-helper-method / accept-language /
+ * sec-fetch-mode / content-length go out lowercase. Canonicalizing any of
+ * these (as Go's Header.Set would) is itself a fingerprint signal, so the
+ * transport applies this map and the sidecar assigns headers to the map
+ * directly instead of via Header.Set.
+ */
+export const CLAUDE_CODE_HEADER_WIRE_CASING: Record<string, string> = {
+  "host": "Host",
+  "accept": "Accept",
+  "x-stainless-retry-count": "X-Stainless-Retry-Count",
+  "x-stainless-timeout": "X-Stainless-Timeout",
+  "x-stainless-lang": "X-Stainless-Lang",
+  "x-stainless-package-version": "X-Stainless-Package-Version",
+  "x-stainless-os": "X-Stainless-OS",
+  "x-stainless-arch": "X-Stainless-Arch",
+  "x-stainless-runtime": "X-Stainless-Runtime",
+  "x-stainless-runtime-version": "X-Stainless-Runtime-Version",
+  "x-stainless-helper-method": "x-stainless-helper-method",
+  "anthropic-dangerous-direct-browser-access": "anthropic-dangerous-direct-browser-access",
+  "anthropic-version": "anthropic-version",
+  "anthropic-beta": "anthropic-beta",
+  "x-app": "x-app",
+  "content-type": "content-type",
+  "accept-language": "accept-language",
+  "sec-fetch-mode": "sec-fetch-mode",
+  "accept-encoding": "Accept-Encoding",
+  "authorization": "authorization",
+  "x-claude-code-session-id": "X-Claude-Code-Session-Id",
+  "x-client-request-id": "x-client-request-id",
+  "content-length": "content-length",
+  "user-agent": "User-Agent",
+};
 
 /**
  * Default request headers of the real Claude Code CLI (measured). Forced onto
  * the wire on the OAuth mimic path regardless of what the inbound client sent —
  * a mismatched x-stainless-* / x-app / user-agent tuple is exactly what gets
- * flagged as third-party.
+ * flagged as third-party. Keys use the exact wire casing from the capture
+ * (see CLAUDE_CODE_HEADER_WIRE_CASING); values mirror sub2api's
+ * DefaultHeaders: js / 0.94.0 / Linux / arm64 / node / v24.3.0 / 0 / 600 /
+ * cli / true.
  */
 export function claudeCodeDefaultHeaders(): Record<string, string> {
   return {
@@ -129,8 +213,8 @@ export function claudeCodeDefaultHeaders(): Record<string, string> {
     "X-Stainless-Runtime-Version": "v24.3.0",
     "X-Stainless-Retry-Count": "0",
     "X-Stainless-Timeout": "600",
-    "X-App": "cli",
-    "Anthropic-Dangerous-Direct-Browser-Access": "true",
+    "x-app": "cli",
+    "anthropic-dangerous-direct-browser-access": "true",
   };
 }
 

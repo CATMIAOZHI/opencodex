@@ -13,7 +13,7 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { CLAUDE_CODE_JA3_TOKEN } from "./claude-code-profile";
+import { CLAUDE_CODE_HEADER_WIRE_CASING, CLAUDE_CODE_JA3_TOKEN } from "./claude-code-profile";
 
 export class MimicTransportUnavailableError extends Error {
   override readonly name = "MimicTransportUnavailableError";
@@ -39,9 +39,10 @@ export class MimicTransportUnavailableError extends Error {
  * scripts/build-mimic-sidecar.sh) keeps `userAgent` as the TLS fingerprint
  * selector / fallback UA but no longer clobbers an explicitly provided
  * User-Agent header — so the wire carries the real CLI UA while the
- * ClientHello keeps the exact JA3. When the patched binary is absent (or
- * `mimicSidecarPath` points elsewhere) the stock binary is used and the old
- * limitation applies: wire UA becomes "firefox".
+ * ClientHello keeps the exact JA3. When the patched binary is absent there is
+ * no stock-binary fallback: exact JA3 with a wrong wire UA is a contradictory
+ * fingerprint, so mimicry is unavailable and the request fails open to native
+ * fetch (see buildSidecarInitOptions).
  */
 const CYCLETLS_GREASE_POLICY_UA = "firefox";
 
@@ -86,8 +87,23 @@ type CycleTLSClientLike = (
 
 let clientPromise: Promise<CycleTLSClientLike> | undefined;
 
-/** One-time warning when degrading to the stock binary (risk-relevant). */
-let warnedStockFallback = false;
+type InitCycleTLSFn = (opts?: Record<string, unknown>) => Promise<CycleTLSClientLike>;
+
+/**
+ * Initialize the cycletls client against a resolved sidecar path.
+ * This is the seam that enforces the risk-control invariant: the client is
+ * NEVER initialized without an explicit patched `executablePath`. The
+ * resolver is injectable so tests can pin the invariant without touching
+ * the filesystem. getClient is the only production caller.
+ */
+export async function initMimicSidecarClient(
+  initCycleTLS: InitCycleTLSFn,
+  resolve: (explicitPath?: string) => string | undefined = resolveMimicSidecarPath,
+  sidecarPath?: string,
+): Promise<CycleTLSClientLike> {
+  const executablePath = resolve(sidecarPath);
+  return initCycleTLS(buildSidecarInitOptions(executablePath));
+}
 
 /**
  * Lazily starts the CycleTLS sidecar (dynamic import: the `cycletls`
@@ -99,10 +115,10 @@ let warnedStockFallback = false;
 async function getClient(sidecarPath?: string): Promise<CycleTLSClientLike> {
   if (!clientPromise) {
     clientPromise = (async () => {
-      let initCycleTLS: (opts?: Record<string, unknown>) => Promise<CycleTLSClientLike>;
+      let initCycleTLS: InitCycleTLSFn;
       try {
         const mod = await import("cycletls") as {
-          default?: (opts?: Record<string, unknown>) => Promise<CycleTLSClientLike>;
+          default?: InitCycleTLSFn;
         };
         if (typeof mod.default !== "function") {
           throw new Error("cycletls default export is not a function");
@@ -114,27 +130,12 @@ async function getClient(sidecarPath?: string): Promise<CycleTLSClientLike> {
         );
       }
       try {
-        // debug=false keeps the sidecar quiet; a random free port is chosen
-        // when `port` is omitted. executablePath selects the patched sidecar
-        // (decoupled JA3 selector / wire UA) when available; omitted it falls
-        // back to the stock npm-shipped binary.
-        const executablePath = resolveMimicSidecarPath(sidecarPath);
-        if (executablePath === undefined && !warnedStockFallback) {
-          warnedStockFallback = true;
-          console.warn(
-            "[antidetect] no patched sidecar found — falling back to the stock " +
-              'cycletls binary, whose wire User-Agent will be "firefox" instead of ' +
-              "claude-cli/... (exact JA3 + wrong UA is easier to flag than no " +
-              "mimicry). Set claudeCode.mimicSidecarPath or ship " +
-              "resources/cycletls-patched/cycletls-<platform>-<arch>.",
-          );
-        }
-        return await initCycleTLS(
-          executablePath
-            ? { debug: false, autoExit: true, executablePath }
-            : { debug: false, autoExit: true },
-        );
+        return await initMimicSidecarClient(initCycleTLS, resolveMimicSidecarPath, sidecarPath);
       } catch (err) {
+        // buildSidecarInitOptions already throws MimicTransportUnavailableError
+        // for a missing sidecar -- pass it through unwrapped so the message
+        // stays accurate ("no sidecar", not "failed to start").
+        if (err instanceof MimicTransportUnavailableError) throw err;
         throw new MimicTransportUnavailableError(
           `cycletls sidecar failed to start: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -274,7 +275,8 @@ export interface MimicFetchOptions {
    * Path to the CycleTLS sidecar binary. When set (or when the bundled
    * patched binary exists), it is passed as `executablePath` so the patched
    * sidecar — which decouples the JA3 selector from the wire User-Agent —
-   * is used instead of the stock npm-shipped binary.
+   * is used. There is no stock-binary fallback: without a patched sidecar,
+   * mimicry is unavailable and the request fails open to native fetch.
    */
   sidecarPath?: string;
 }
@@ -284,22 +286,51 @@ export interface MimicFetchOptions {
  * 1. explicit `sidecarPath` (config `claudeCode.mimicSidecarPath`),
  * 2. the bundled patched binary for this platform
  *    (resources/cycletls-patched/cycletls-<platform>-<arch>),
- * 3. undefined — the stock npm-shipped binary (known UA limitation).
- * A missing explicit path is NOT an error: it fails open to (2)/(3), and a
- * sidecar that fails to start fails open to native fetch downstream.
+ * 3. undefined — no patched sidecar available. Callers MUST NOT fall back to
+ *    the stock npm-shipped binary here: exact JA3 paired with a wrong
+ *    "firefox" wire User-Agent is a contradictory fingerprint, easier to flag
+ *    than no mimicry. Treat undefined as "mimicry unavailable" and fail open
+ *    to native fetch via MimicTransportUnavailableError.
  */
 export function resolveMimicSidecarPath(explicitPath?: string): string | undefined {
   if (explicitPath && existsSync(explicitPath)) return explicitPath;
-  const bundled = join(
-    import.meta.dir,
-    "..",
-    "..",
-    "resources",
-    "cycletls-patched",
-    `cycletls-${process.platform}-${process.arch}`,
-  );
-  if (existsSync(bundled)) return bundled;
+  // On Windows the build script produces `cycletls-win32-x64.exe` (go appends
+  // .exe); accept both spellings, preferring the conventional one.
+  const names =
+    process.platform === "win32"
+      ? [`cycletls-${process.platform}-${process.arch}.exe`, `cycletls-${process.platform}-${process.arch}`]
+      : [`cycletls-${process.platform}-${process.arch}`];
+  for (const name of names) {
+    const bundled = join(import.meta.dir, "..", "..", "resources", "cycletls-patched", name);
+    if (existsSync(bundled)) return bundled;
+  }
   return undefined;
+}
+
+/**
+ * Build the init options for the cycletls client from a resolved sidecar
+ * path. Risk-control invariant, covered by tests: the client is NEVER
+ * initialized without an explicit patched `executablePath`. A missing
+ * sidecar throws MimicTransportUnavailableError (fail-open to native fetch
+ * upstream) instead of silently using the stock binary's contradictory
+ * fingerprint.
+ */
+export function buildSidecarInitOptions(resolvedPath: string | undefined): {
+  debug: boolean;
+  autoExit: boolean;
+  executablePath: string;
+} {
+  if (resolvedPath === undefined) {
+    throw new MimicTransportUnavailableError(
+      "no patched mimic sidecar found; refusing the stock cycletls binary " +
+        "(exact JA3 + wrong wire User-Agent is a contradictory fingerprint). " +
+        "Set claudeCode.mimicSidecarPath or ship " +
+        "resources/cycletls-patched/cycletls-<platform>-<arch>.",
+    );
+  }
+  // debug=false keeps the sidecar quiet; a random free port is chosen when
+  // `port` is omitted. autoExit ties the Go child process to our lifetime.
+  return { debug: false, autoExit: true, executablePath: resolvedPath };
 }
 
 /**
@@ -322,7 +353,22 @@ export async function fetchViaClaudeCodeMimic(
   ); // throws MimicTransportUnavailableError
   const headers: Record<string, string> = {};
   const src = new Headers(init.headers);
-  src.forEach((value, key) => { headers[key] = value; });
+  // The Headers object normalizes names to lowercase; re-apply the exact
+  // wire casing captured from the real CLI before handing the map to the
+  // sidecar (which assigns it to the Go header map directly, bypassing
+  // Header.Set's canonicalization).
+  src.forEach((value, key) => {
+    headers[CLAUDE_CODE_HEADER_WIRE_CASING[key] ?? key] = value;
+  });
+  // Defense in depth for the P0 invariant below: strip any caller-supplied
+  // content-length at this last gate. fhttp computes the single canonical
+  // one from the body; a stale or mismatched caller value would either
+  // duplicate on the wire or desync from the actual body -- both are
+  // request-smuggling signals. (Only these two spellings are reachable:
+  // the Headers object above already lowercased every name, and the remap
+  // maps "content-length" to itself.)
+  delete headers["content-length"];
+  delete headers["Content-Length"];
 
   const method = (init.method ?? "GET").toLowerCase();
   const body = init.body;
@@ -337,6 +383,26 @@ export async function fetchViaClaudeCodeMimic(
     typeof body === "string" ? body
     : body instanceof URLSearchParams ? body.toString()
     : undefined;
+
+  // NOTE (risk control): do NOT add a content-length entry to `headers` here.
+  // fhttp's transferWriter auto-adds a canonical "Content-Length" from the
+  // request body, and it only suppresses that auto-add when
+  // hdrs.Get("Content-Length") is non-empty. Header.Get canonicalizes its
+  // lookup key, so it cannot see a lowercase map entry -- handing the sidecar
+  // a lowercase "content-length" would put TWO Content-Length headers on the
+  // wire. Duplicate Content-Length is a request-smuggling signal: strict
+  // edges may answer 400, and a 400 is a genuine upstream response that does
+  // NOT fail open.
+  // So the header map carries no content-length at all: fhttp adds the single
+  // canonical one, and the patched sidecar builds the HeaderOrderKey from the
+  // full lowercased order list (not the intersection with provided headers),
+  // so the case-insensitive matcher places the auto-added "Host" and
+  // "Content-Length" at their captured positions -- Host first,
+  // Content-Length second-to-last before x-stainless-helper-method.
+  // Verified by local loopback against the built patched binary.
+  // Known accepted deviation: the real CLI sends it lowercase
+  // ("content-length"); we send canonical ("Content-Length"). Casing of this
+  // one header is a far weaker signal than a duplicate-CL protocol anomaly.
 
   const isStream = opts.isStream ?? false;
 

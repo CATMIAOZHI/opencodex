@@ -1,10 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import {
   MimicTransportUnavailableError,
+  buildSidecarInitOptions,
   fetchViaClaudeCodeMimic,
+  initMimicSidecarClient,
   setMimicTransportClientForTests,
 } from "../src/antidetect/cycletls-transport";
-import { CLAUDE_CODE_JA3_TOKEN } from "../src/antidetect/claude-code-profile";
+import { CLAUDE_CODE_HEADER_WIRE_ORDER, CLAUDE_CODE_JA3_TOKEN } from "../src/antidetect/claude-code-profile";
 import { createClaudeCodeMimicFetch } from "../src/antidetect/index";
 import type { OcxConfig } from "../src/types";
 
@@ -86,7 +88,7 @@ test("transport pins the JA3 profile options (no GREASE, no H2, no token rewrite
   const calls = fakeClient(() => ({ status: 200, headers: {}, data: fakeStream([]) }));
   await fetchViaClaudeCodeMimic(
     "https://api.anthropic.com/v1/messages",
-    { method: "POST", headers: { "user-agent": "claude-cli/2.1.63 (external, cli)" }, body: "{}" },
+    { method: "POST", headers: { "user-agent": "claude-cli/2.1.258 (external, cli)" }, body: "{}" },
     { isStream: true },
   );
   const opts = calls[0].options;
@@ -96,7 +98,9 @@ test("transport pins the JA3 profile options (no GREASE, no H2, no token rewrite
   expect(opts["userAgent"]).toBe("firefox");
   expect(opts["forceHTTP1"]).toBe(true);
   expect(opts["tls13AutoRetry"]).toBe(false);
-  expect((opts["headers"] as Record<string, string>)["user-agent"]).toContain("claude-cli");
+  // Headers leave the transport in exact wire casing (sub2api capture), not
+  // the lowercase form the Headers object normalizes to.
+  expect((opts["headers"] as Record<string, string>)["User-Agent"]).toContain("claude-cli");
 });
 
 test("a wedged sidecar times out instead of hanging forever", async () => {
@@ -165,7 +169,7 @@ test("pipeline derives the session header from the body after stripping", async 
     }),
     body: JSON.stringify({ metadata: { user_id: "real-session:99" }, stream: true }),
   });
-  expect(sentHeaders["x-claude-code-session-id"]).toBe("real-session");
+  expect(sentHeaders["X-Claude-Code-Session-Id"]).toBe("real-session");
 });
 
 test("resolveMimicSidecarPath prefers an explicit existing path", async () => {
@@ -186,10 +190,39 @@ test("resolveMimicSidecarPath falls back to bundled binary or undefined", async 
   const { resolveMimicSidecarPath } = await import("../src/antidetect/cycletls-transport");
   const { existsSync } = await import("node:fs");
   for (const p of [resolveMimicSidecarPath(), resolveMimicSidecarPath("/nonexistent/sidecar")]) {
-    if (p === undefined) continue; // platform without a bundled binary: stock fallback
-    expect(p.endsWith(`cycletls-${process.platform}-${process.arch}`)).toBe(true);
+    if (p === undefined) continue; // platform without a bundled binary: mimicry unavailable
+    const base = `cycletls-${process.platform}-${process.arch}`;
+    // win32 also accepts the .exe spelling the build script produces.
+    expect(p.endsWith(`/${base}`) || p.endsWith(`/${base}.exe`)).toBe(true);
     expect(existsSync(p)).toBe(true);
   }
+});
+
+test("missing patched sidecar throws instead of using the stock binary (risk control)", () => {
+  // The client must NEVER be initialized without an explicit patched
+  // executablePath: exact JA3 + wrong wire UA is a contradictory fingerprint.
+  expect(() => buildSidecarInitOptions(undefined)).toThrow(MimicTransportUnavailableError);
+  const opts = buildSidecarInitOptions("/patched/cycletls-linux-x64");
+  expect(opts.executablePath).toBe("/patched/cycletls-linux-x64");
+  expect(opts.debug).toBe(false);
+  expect(opts.autoExit).toBe(true);
+});
+
+test("sidecar init wiring never reaches init without a patched executablePath", async () => {
+  // Pins the getClient -> initMimicSidecarClient -> buildSidecarInitOptions
+  // wiring: a future edit re-adding a silent stock fallback inside the
+  // wiring would fail here instead of shipping a contradictory fingerprint.
+  let initOpts: Record<string, unknown> | undefined;
+  const fakeInit = async (opts?: Record<string, unknown>) => {
+    initOpts = opts;
+    return async () => ({ status: 200, headers: {}, data: "{}" });
+  };
+  await expect(
+    initMimicSidecarClient(fakeInit, () => undefined, "/nonexistent/sidecar"),
+  ).rejects.toThrow(MimicTransportUnavailableError);
+  expect(initOpts).toBeUndefined(); // initCycleTLS was never called
+  await initMimicSidecarClient(fakeInit, () => "/patched/cycletls-linux-x64");
+  expect(initOpts?.["executablePath"]).toBe("/patched/cycletls-linux-x64");
 });
 
 test("Go header-phase timeout form is also a synthetic error (fail-open)", async () => {
@@ -218,4 +251,98 @@ test("sidecar timeout option is passed in seconds, not ms", async () => {
   );
   // Go interprets timeout as seconds; 120_000ms must become 120, not 120_000 (~33h).
   expect(sentTimeout).toBe(120);
+});
+
+test("transport hands exact wire casing to the sidecar (no content-length entry)", async () => {
+  // NOTE: this asserts the TS -> sidecar handoff object, not the wire itself.
+  // Wire casing is established by source inspection of the patched sidecar
+  // (direct header-map assignment instead of Header.Set) against fhttp.
+  const calls = fakeClient(() => ({ status: 200, headers: {}, data: fakeStream([]) }));
+  const body = JSON.stringify({ model: "x", hello: "世界" });
+  await fetchViaClaudeCodeMimic(
+    "https://api.anthropic.com/v1/messages",
+    {
+      method: "POST",
+      headers: {
+        "accept": "application/json",
+        "x-stainless-os": "Linux",
+        "x-app": "cli",
+        "anthropic-version": "2023-06-01",
+        "authorization": "Bearer t",
+        "x-client-request-id": "id-1",
+        "accept-encoding": "gzip",
+      },
+      body,
+    },
+    { isStream: false },
+  );
+  const sent = calls[0].options["headers"] as Record<string, string>;
+  // Exact wire casing per the sub2api capture (not Go-canonical, not lowercase).
+  expect(sent["Accept"]).toBe("application/json");
+  expect(sent["X-Stainless-OS"]).toBe("Linux");
+  expect(sent["x-app"]).toBe("cli");
+  expect(sent["anthropic-version"]).toBe("2023-06-01");
+  expect(sent["authorization"]).toBe("Bearer t");
+  expect(sent["x-client-request-id"]).toBe("id-1");
+  expect(sent["Accept-Encoding"]).toBe("gzip");
+  // No lowercase/canonical duplicates of the same headers.
+  expect(sent["accept"]).toBeUndefined();
+  expect(sent["X-App"]).toBeUndefined();
+  expect(sent["Anthropic-Version"]).toBeUndefined();
+  // No content-length entry in ANY casing: fhttp's transferWriter auto-adds a
+  // single canonical "Content-Length" (its Get-based presence check cannot see
+  // a lowercase map key, so a manual lowercase entry would duplicate it on
+  // the wire). The case-insensitive HeaderOrderKey matcher still places the
+  // auto-added header at the captured position from our order list.
+  expect(sent["content-length"]).toBeUndefined();
+  expect(sent["Content-Length"]).toBeUndefined();
+});
+
+test("transport strips a caller-supplied content-length (P0 defense in depth)", async () => {
+  const calls = fakeClient(() => ({ status: 200, headers: {}, data: fakeStream([]) }));
+  await fetchViaClaudeCodeMimic(
+    "https://api.anthropic.com/v1/messages",
+    {
+      method: "POST",
+      headers: { "accept": "application/json", "content-length": "999" },
+      body: "{}",
+    },
+    { isStream: false },
+  );
+  const sent = calls[0].options["headers"] as Record<string, string>;
+  // A stale/mismatched caller value must never reach the sidecar: fhttp
+  // computes the single canonical Content-Length from the actual body.
+  expect(sent["content-length"]).toBeUndefined();
+  expect(sent["Content-Length"]).toBeUndefined();
+});
+
+test("transport omits content-length when there is no body", async () => {
+  const calls = fakeClient(() => ({ status: 200, headers: {}, data: fakeStream([]) }));
+  await fetchViaClaudeCodeMimic(
+    "https://api.anthropic.com/v1/messages",
+    { method: "GET", headers: { "accept": "application/json" } },
+    { isStream: false },
+  );
+  const sent = calls[0].options["headers"] as Record<string, string>;
+  expect(sent["content-length"]).toBeUndefined();
+  expect(sent["Content-Length"]).toBeUndefined();
+});
+
+test("mimic pipeline passes the exact wire header order to the sidecar", async () => {
+  const calls = fakeClient(() => ({ status: 200, headers: {}, data: fakeStream([]) }));
+  const mimicFetch = createClaudeCodeMimicFetch(
+    "https://api.anthropic.com/v1/messages",
+    new Headers({ authorization: "Bearer t", "content-type": "application/json" }),
+    { claudeCode: { fingerprintMimic: true } } as OcxConfig,
+  );
+  expect(mimicFetch).not.toBeNull();
+  await mimicFetch!("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { authorization: "Bearer t", "content-type": "application/json" },
+    body: JSON.stringify({ model: "m", stream: false }),
+  });
+  const order = calls[0].options["headerOrder"] as string[];
+  // The sidecar's order list starts with the exact captured wire order;
+  // any extra headers are appended after, never interleaved.
+  expect(order.slice(0, CLAUDE_CODE_HEADER_WIRE_ORDER.length)).toEqual(CLAUDE_CODE_HEADER_WIRE_ORDER);
 });

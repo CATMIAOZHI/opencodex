@@ -25,6 +25,7 @@ import {
   MimicTransportUnavailableError,
   fetchViaClaudeCodeMimic,
 } from "./cycletls-transport";
+import { CLAUDE_CODE_HEADER_WIRE_ORDER } from "./claude-code-profile";
 
 export { normalizeDatelineBody } from "./dateline";
 export {
@@ -81,31 +82,15 @@ function isStreamBody(body: string): boolean {
   }
 }
 
-/** Wire order for the mimic headers; remaining headers follow afterwards. */
-const MIMIC_HEADER_ORDER = [
-  "host",
-  "connection",
-  "content-length",
-  "authorization",
-  "x-api-key",
-  "anthropic-version",
-  "anthropic-beta",
-  "x-stainless-lang",
-  "x-stainless-package-version",
-  "x-stainless-os",
-  "x-stainless-arch",
-  "x-stainless-runtime",
-  "x-stainless-runtime-version",
-  "x-stainless-retry-count",
-  "x-stainless-timeout",
-  "x-stainless-helper-method",
-  "x-app",
-  "anthropic-dangerous-direct-browser-access",
-  "accept",
-  "content-type",
-  "x-client-request-id",
-  "x-claude-code-session-id",
-];
+/** Wire order for the mimic headers: the exact header sequence captured from
+ * the real Claude Code CLI (see CLAUDE_CODE_HEADER_WIRE_ORDER). Remaining
+ * headers follow afterwards. Matching is case-insensitive because the
+ * Headers object normalizes names to lowercase while the order list carries
+ * the exact wire casing. */
+const MIMIC_HEADER_ORDER = CLAUDE_CODE_HEADER_WIRE_ORDER;
+const MIMIC_HEADER_ORDER_LOWER = new Set(
+  CLAUDE_CODE_HEADER_WIRE_ORDER.map((h) => h.toLowerCase()),
+);
 
 /**
  * The fetch-shaped function the mimic pipeline exposes. Deliberately NOT
@@ -153,7 +138,7 @@ export function createClaudeCodeMimicFetch(
 
     const headerOrder = [
       ...MIMIC_HEADER_ORDER,
-      ...[...outHeaders.keys()].filter((k) => !MIMIC_HEADER_ORDER.includes(k)),
+      ...[...outHeaders.keys()].filter((k) => !MIMIC_HEADER_ORDER_LOWER.has(k)),
     ];
 
     const mimicInit: RequestInit = { ...init, headers: outHeaders, body: bodyString || init.body };

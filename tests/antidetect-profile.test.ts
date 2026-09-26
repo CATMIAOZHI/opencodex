@@ -4,6 +4,8 @@ import {
   CLAUDE_CODE_CIPHER_SUITES,
   CLAUDE_CODE_CURVES,
   CLAUDE_CODE_EXTENSION_ORDER,
+  CLAUDE_CODE_HEADER_WIRE_CASING,
+  CLAUDE_CODE_HEADER_WIRE_ORDER,
   CLAUDE_CODE_JA3,
   CLAUDE_CODE_JA3_TOKEN,
   CLAUDE_CODE_POINT_FORMATS,
@@ -81,4 +83,58 @@ test("mimic is enabled by default", () => {
 test('string "false" also disables the stack (hand-edited JSON)', () => {
   const config = cfg({ fingerprintMimic: "false" } as unknown as OcxConfig["claudeCode"]);
   expect(isClaudeCodeMimicEnabled(config)).toBe(false);
+});
+
+test("wire header order matches the sub2api capture exactly", () => {
+  // Sequence verbatim from sub2api's headerWireOrder (real Claude CLI packet
+  // capture), with Host leading (Node writes it first; sub2api's Go server
+  // parses it out of the header map so it is absent from their list).
+  // Per-entry casing follows CLAUDE_CODE_HEADER_WIRE_CASING (the exact wire
+  // casing from sub2api's headerWireCasing), not the order list's own
+  // spelling -- order matching is case-insensitive on both sides, so e.g.
+  // "Accept-Encoding" here vs lowercase "accept-encoding" in their list is
+  // irrelevant to placement.
+  expect(CLAUDE_CODE_HEADER_WIRE_ORDER).toEqual([
+    "Host",
+    "Accept",
+    "X-Stainless-Retry-Count",
+    "X-Stainless-Timeout",
+    "X-Stainless-Lang",
+    "X-Stainless-Package-Version",
+    "X-Stainless-OS",
+    "X-Stainless-Arch",
+    "X-Stainless-Runtime",
+    "X-Stainless-Runtime-Version",
+    "anthropic-dangerous-direct-browser-access",
+    "anthropic-version",
+    "authorization",
+    "x-app",
+    "User-Agent",
+    "X-Claude-Code-Session-Id",
+    "content-type",
+    "anthropic-beta",
+    "x-client-request-id",
+    "accept-language",
+    "sec-fetch-mode",
+    "Accept-Encoding",
+    "content-length",
+    "x-stainless-helper-method",
+  ]);
+});
+
+test("every wire-order header has a casing-map entry that round-trips", () => {
+  for (const wire of CLAUDE_CODE_HEADER_WIRE_ORDER) {
+    const mapped = CLAUDE_CODE_HEADER_WIRE_CASING[wire.toLowerCase()];
+    expect(mapped).toBe(wire);
+  }
+  // Spot-check the non-obvious casings from the capture: lowercase where Go
+  // would canonicalize, Title-Case where the CLI really sends it.
+  expect(CLAUDE_CODE_HEADER_WIRE_CASING["x-app"]).toBe("x-app");
+  expect(CLAUDE_CODE_HEADER_WIRE_CASING["anthropic-version"]).toBe("anthropic-version");
+  expect(CLAUDE_CODE_HEADER_WIRE_CASING["authorization"]).toBe("authorization");
+  expect(CLAUDE_CODE_HEADER_WIRE_CASING["x-stainless-os"]).toBe("X-Stainless-OS");
+  expect(CLAUDE_CODE_HEADER_WIRE_CASING["x-stainless-helper-method"]).toBe("x-stainless-helper-method");
+  expect(CLAUDE_CODE_HEADER_WIRE_CASING["x-claude-code-session-id"]).toBe("X-Claude-Code-Session-Id");
+  expect(CLAUDE_CODE_HEADER_WIRE_CASING["content-length"]).toBe("content-length");
+  expect(CLAUDE_CODE_HEADER_WIRE_CASING["user-agent"]).toBe("User-Agent");
 });
