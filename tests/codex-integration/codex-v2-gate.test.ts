@@ -1982,10 +1982,9 @@ describe("3-state multi-agent mode", () => {
     expect(native.multi_agent_version).toBe("v2");
   });
 
-  test("mode default prefers pristine-baseline pins over the bundled snapshot", () => {
-    // The installed pristine backup is authoritative for the rows it contains: a
-    // baseline pin wins even when the bundled snapshot pins a different value, and
-    // a baseline row with no pin still gets stale forced-stamp cleanup.
+  test("operator V2 policy overrides pristine-baseline pins and unpinned rows", () => {
+    // Baseline recovery happens internally; the fork's final operator policy
+    // deliberately publishes every row as V2.
     const diskSol = { ...template(), slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", multi_agent_version: "v2" };
     const diskLuna = { ...template(), slug: "gpt-5.6-luna", display_name: "GPT-5.6 Luna", multi_agent_version: "v2" };
     const diskNative = { ...template(), slug: "gpt-5.5", display_name: "gpt-5.5", multi_agent_version: "v2" };
@@ -1999,11 +1998,9 @@ describe("3-state multi-agent mode", () => {
         ["gpt-5.5", null],
       ]),
     );
-    // Baseline says v1 — applied instead of the bundled snapshot's v2 pin.
-    expect(merged.find(e => e.slug === "gpt-5.6-sol")?.multi_agent_version).toBe("v1");
-    expect(merged.find(e => e.slug === "gpt-5.6-luna")?.multi_agent_version).toBe("v1");
-    // Baseline contains the row with no pin — stale forced stamp is cleared.
-    expect(merged.find(e => e.slug === "gpt-5.5")?.multi_agent_version).toBeUndefined();
+    expect(merged.find(e => e.slug === "gpt-5.6-sol")?.multi_agent_version).toBe("v2");
+    expect(merged.find(e => e.slug === "gpt-5.6-luna")?.multi_agent_version).toBe("v2");
+    expect(merged.find(e => e.slug === "gpt-5.5")?.multi_agent_version).toBe("v2");
   });
 
   test("mode default preserves pins on live native rows outside the pristine baseline", () => {
@@ -2011,8 +2008,7 @@ describe("3-state multi-agent mode", () => {
     // user- or provider-preserved pin newer than our bundled snapshot. It was not
     // stamped by us, so default mode must not delete it.
     const liveNative = { ...template(), slug: "custom-native", display_name: "Custom Native", multi_agent_version: "v2" };
-    // A routed row is never in the bare-native baseline, so its absence proves
-    // nothing; default mode still clears its stale pin.
+    // The final operator policy also updates routed rows absent from the baseline.
     const staleRouted = { ...template(), slug: "provider/model", display_name: "Routed", multi_agent_version: "v1" };
     const merged = mergeCatalogEntriesForSync(
       [liveNative as never, staleRouted as never],
@@ -2021,15 +2017,12 @@ describe("3-state multi-agent mode", () => {
       new Map([["gpt-5.6-sol", "v2"]]),
     );
     expect(merged.find(e => e.slug === "custom-native")?.multi_agent_version).toBe("v2");
-    expect(merged.find(e => e.slug === "provider/model")?.multi_agent_version).toBeUndefined();
+    expect(merged.find(e => e.slug === "provider/model")?.multi_agent_version).toBe("v2");
   });
 
-  test("mode default keys baseline pins by trusted account-bound slugs only", () => {
-    // hasNativeDefault resolves the lookup slug through
-    // trustedAccountBoundNativeCatalogSlug, so an account-bound clone tracks its
-    // bound native's pristine pin: the backup's "v1" beats both the bundled
-    // snapshot's "v2" and a stale stamp on the clone, and a baseline row with no
-    // pin still clears the clone's stale stamp.
+  test("operator V2 policy covers account-bound rows while baseline extraction stays scoped", () => {
+    // Account-bound recovery still uses trusted native slugs, then the final
+    // operator pass publishes V2 for both pinned and unpinned baseline rows.
     const boundSol = {
       ...template(),
       slug: "team/gpt-5.6-sol",
@@ -2060,8 +2053,8 @@ describe("3-state multi-agent mode", () => {
       new Set(), new Set(), undefined, false,
       new Map<string, string | null>([["gpt-5.6-sol", "v1"], ["gpt-5.5", null]]),
     );
-    expect(merged.find(e => e.slug === "team/gpt-5.6-sol")?.multi_agent_version).toBe("v1");
-    expect(merged.find(e => e.slug === "team/gpt-5.5")?.multi_agent_version).toBeUndefined();
+    expect(merged.find(e => e.slug === "team/gpt-5.6-sol")?.multi_agent_version).toBe("v2");
+    expect(merged.find(e => e.slug === "team/gpt-5.5")?.multi_agent_version).toBe("v2");
     // Not "v1": the contract this case exists for is that an untrusted slashed row
     // never keys the baseline by its post-slash part. Whether the row then keeps its
     // own pin or is cleared as an ordinary routed row is decided elsewhere and is not
@@ -2083,12 +2076,8 @@ describe("3-state multi-agent mode", () => {
     expect(defaults.get("gpt-5.5")).toBeNull();
   });
 
-  test("mode default keeps a live pin the supplied baseline does not mention", () => {
-    // A supplied baseline is authoritative only for the slugs it contains. When
-    // the backup omits the bundled "gpt-5.6-sol" row, the live catalog's preserved
-    // "v1" pin must survive: falling back to the bundled "v2" snapshot here would
-    // rewrite a pin the baseline never spoke about. The preservation branch below
-    // can only run when the bundled lookup yields no pin for this row.
+  test("operator V2 policy overrides a live V1 pin outside the supplied baseline", () => {
+    // Baseline absence does not exempt a row from the explicit global V2 policy.
     const liveSol = { ...template(), slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", multi_agent_version: "v1" };
     const merged = mergeCatalogEntriesForSync(
       [liveSol as never], [], new Map(), [], false,
@@ -2097,7 +2086,7 @@ describe("3-state multi-agent mode", () => {
       new Set(), new Set(), undefined, false,
       new Map<string, string | null>([["gpt-5.5", "v1"]]),
     );
-    expect(merged.find(e => e.slug === "gpt-5.6-sol")?.multi_agent_version).toBe("v1");
+    expect(merged.find(e => e.slug === "gpt-5.6-sol")?.multi_agent_version).toBe("v2");
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
