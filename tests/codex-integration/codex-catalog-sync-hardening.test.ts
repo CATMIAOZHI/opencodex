@@ -599,7 +599,8 @@ describe("Codex catalog sync hardening", () => {
     }
     expect(output.unchanged).toBe(true);
     expect(output.deleted.models.some((row: { slug: string }) => row.slug === "openai/gpt-6-astra")).toBe(false);
-  });
+  // Three syncs and config ACL writes in a subprocess can exceed 5s on Windows.
+  }, 15_000);
 
   test("explicit Codex-forward Daybreak survives sync with Sol metadata while account picker is off", () => {
     const catalogPath = join(codexHome, "catalog.json");
