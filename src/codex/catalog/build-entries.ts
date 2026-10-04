@@ -373,9 +373,8 @@ export function orderForModelPicker(
  * Every generated routed row — current full-slug form, the June–July 2026
  * provider-name form, and legacy combo aliases — carries the stable
  * description prefix `Routed via opencodex → `; foreign rows from Cursor or
- * user tooling do not. `owned_by` cannot serve as the signal (upstream
- * ownership), and `comp_hash` defaults to "opencodex" for every normalized
- * row.
+ * user tooling do not. `owned_by` describes upstream ownership, and `comp_hash`
+ * describes history compatibility; neither is an authorship signal.
  */
 function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
   if (isNativeAliasCatalogEntry(entry)) return true;
@@ -441,7 +440,8 @@ export interface ObservedCatalogMergePolicy {
 export const CANONICAL_NATIVE_CATALOG_CONTENT_POLICY: Readonly<
   Pick<ObservedCatalogMergePolicy, "nativeBackfillSlugs" | "unsupportedNativeEntries">
 > = Object.freeze({
-  nativeBackfillSlugs: Object.freeze([...NATIVE_OPENAI_MODELS]),
+  // A getter: configured natives join NATIVE_OPENAI_MODELS after this module loads.
+  get nativeBackfillSlugs() { return Object.freeze([...NATIVE_OPENAI_MODELS]); },
   unsupportedNativeEntries: "drop",
 });
 
@@ -785,7 +785,13 @@ export function mergeCatalogEntriesFromObservedState({
       delete entry[SPAWN_PRIORITY_FIELD];
     }
     const slug = String(entry.slug);
-    if (!isOcxAuthoredRoutedEntry(entry) || isNativeAliasCatalogEntry(entry)) continue;
+    if (!isOcxAuthoredRoutedEntry(entry)) continue;
+    // The builder no longer copies a template's comp_hash onto routed rows (#5796), but a row
+    // kept from disk may still carry one. Custom rows, Codex-forward aliases included, never
+    // reach this loop: they are rebuilt from config.
+    // Clear the former synthetic "opencodex" marker as well: it is not upstream evidence.
+    entry.comp_hash = null;
+    if (isNativeAliasCatalogEntry(entry)) continue;
     const featuredRank = featuredRankOf(slug);
     entry.priority = featuredRank !== undefined
       ? featuredRank * priorityStride
@@ -864,9 +870,22 @@ export function mergeCatalogEntriesFromObservedState({
     const normalized = reserveProjection ? m : normalizeServiceTiers(m);
     if (!reserveProjection && !isNativeAliasCatalogEntry(normalized)) applyNativeOpenAiContextOverride(normalized, openaiContextCap);
     const exactCombo = isExactComboCatalogEntry(m, exactComboSlugs);
+    // The builder copied this metadata from the pinned first-party row only for an exact
+    // ChatGPT/Codex forward custom alias. Freshness plus source equality prevents an old or
+    // unrelated routed row from claiming the native account's access programs at this second
+    // normalization boundary.
+    const nativeSourceSlug = typeof m.slug === "string" && m.slug.startsWith("openai/")
+      ? m.slug.slice("openai/".length) : undefined;
+    const nativeSource = nativeSourceSlug ? upstreamNativeEntry(nativeSourceSlug) : undefined;
+    const preserveNativeAccessPrograms = freshCustomEntries.has(m)
+      && m.owned_by !== COMBO_NAMESPACE
+      && nativeSource != null
+      && Object.hasOwn(nativeSource, "available_access_programs")
+      && JSON.stringify(m.available_access_programs) === JSON.stringify(nativeSource.available_access_programs);
     const e = reserveProjection ? normalized : ensureStrictCatalogFields(normalized, {
       preserveExactInputModalities: exactCombo,
       isRouted: finalRoutedEntrySet.has(m),
+      preserveNativeAccessPrograms,
     });
     // Mock-max universality (260709): preserved routed entries from disk may predate
     // the max rung — ensure it here so subagent max spawns validate on every

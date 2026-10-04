@@ -205,6 +205,7 @@ fn ensure(app: &AppHandle, endpoint: ProxyEndpoint) -> tauri::Result<WebviewWind
     .user_agent(&window::webview_user_agent())
     .initialization_script(initialization_script())
     .on_navigation(popup_navigation_allowed(endpoint, app_handle.clone()))
+    .on_new_window(window::open_new_windows_in_default_browser())
     .on_page_load(|popup, payload| {
         if matches!(payload.event(), PageLoadEvent::Finished) {
             set_visibility(&popup, popup.is_visible().unwrap_or(false));
@@ -247,6 +248,9 @@ fn popup_navigation_allowed(
 ) -> impl Fn(&Url) -> bool + Send + 'static {
     move |url| {
         if !same_origin(url, endpoint) {
+            // WKWebView asks this policy before it would create a window for a `_blank` link, so
+            // refusing here without opening is what left the popup's external links dead on macOS.
+            window::open_in_default_browser(url);
             return false;
         }
         if is_close_url(url, endpoint) {
@@ -257,7 +261,11 @@ fn popup_navigation_allowed(
             hide(&app);
             if let Some(main) = app.get_webview_window("main") {
                 window::show(&main);
-                let _ = main.navigate(url.clone());
+                let session = app
+                    .state::<crate::updater::DesktopUpdateState>()
+                    .session_id()
+                    .to_string();
+                let _ = main.navigate(dashboard_destination(url, &session));
             }
             return false;
         }
@@ -317,6 +325,14 @@ fn is_dashboard_url(url: &Url, endpoint: ProxyEndpoint) -> bool {
         && url.path() == "/"
         && url.query() == query
         && matches!(url.fragment(), Some("/usage") | Some("/usage/companion"))
+}
+
+fn dashboard_destination(url: &Url, session: &str) -> Url {
+    let mut destination = url.clone();
+    destination
+        .query_pairs_mut()
+        .append_pair("desktop_session", session);
+    destination
 }
 
 fn set_visibility(popup: &WebviewWindow, visible: bool) {
@@ -379,6 +395,24 @@ mod tests {
             &ENDPOINT.url("/#/usage").parse().unwrap(),
             ENDPOINT
         ));
+    }
+
+    #[test]
+    fn dashboard_navigation_keeps_the_validated_fragment() {
+        for fragment in ["/usage", "/usage/companion"] {
+            let source: Url = ENDPOINT
+                .url(&format!("/?desktop=open#{fragment}"))
+                .parse()
+                .unwrap();
+            assert!(is_dashboard_url(&source, ENDPOINT));
+            let destination = dashboard_destination(&source, "session-123");
+            assert_eq!(
+                destination.as_str(),
+                ENDPOINT.url(&format!(
+                    "/?desktop=open&desktop_session=session-123#{fragment}"
+                ))
+            );
+        }
     }
 
     #[test]

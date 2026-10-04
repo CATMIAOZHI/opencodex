@@ -14,6 +14,8 @@ import { runningProxyUpdateHeaders } from "../oauth/login-cli";
 
 export type CliStdin = NodeJS.ReadableStream & { isTTY?: boolean; readableEnded?: boolean };
 
+export const MAX_LINK_CREDENTIAL_BYTES = 4 * 1024;
+
 export interface RuntimeApiDeps {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
@@ -198,6 +200,7 @@ export function takeOption(args: string[], flag: string): string | undefined {
   return value;
 }
 
+/** Consume one boolean option using the supported on/off synonyms; reject other values. */
 export function takeBooleanOption(args: string[], flag: string): boolean | undefined {
   const raw = takeOption(args, flag);
   if (raw === undefined) return undefined;
@@ -206,11 +209,13 @@ export function takeBooleanOption(args: string[], flag: string): boolean | undef
   throw new CliUsageError(`${flag} must be on or off`);
 }
 
+/** Parse a decimal safe integer, allowing separators only between digits. */
 export function takeIntegerOption(args: string[], flag: string, options: { min?: number } = {}): number | undefined {
   const raw = takeOption(args, flag);
   if (raw === undefined) return undefined;
-  const value = Number(raw.replace(/[_,]/g, ""));
-  if (!Number.isInteger(value) || value < (options.min ?? Number.MIN_SAFE_INTEGER)) {
+  const decimal = raw.trim();
+  const value = /^[+-]?\d+(?:[_,]\d+)*$/.test(decimal) ? Number(decimal.replace(/[_,]/g, "")) : NaN;
+  if (!Number.isSafeInteger(value) || value < (options.min ?? Number.MIN_SAFE_INTEGER)) {
     throw new CliUsageError(`${flag} must be an integer${options.min !== undefined ? ` >= ${options.min}` : ""}`);
   }
   return value;
@@ -389,9 +394,103 @@ export async function readSecretLine(deps: RuntimeApiDeps, label: string): Promi
   return line;
 }
 
+/** Read a bounded secret payload while keeping the original bytes available for zeroing. */
+export async function readSecretBytes(
+  deps: RuntimeApiDeps,
+  label: string,
+  maxBytes = MAX_LINK_CREDENTIAL_BYTES,
+): Promise<Uint8Array> {
+  const input: CliStdin = deps.stdinImpl ?? process.stdin;
+  const timeoutMs = deps.stdinTimeoutMs ?? 120_000;
+  if (input.readableEnded === true) throw new CliUsageError(`${label} input was empty`);
+  return await new Promise<Uint8Array>((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      input.removeListener("data", onData);
+      input.removeListener("end", onEnd);
+      input.removeListener("error", onError);
+    };
+    const wipeChunks = () => {
+      for (const chunk of chunks) chunk.fill(0);
+    };
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { fn(); }
+      finally { wipeChunks(); }
+    };
+    const onData = (chunk: unknown) => {
+      const source = chunk instanceof Uint8Array ? chunk : undefined;
+      let bytes: Uint8Array | undefined;
+      let retained = false;
+      try {
+        bytes = typeof chunk === "string"
+          ? new TextEncoder().encode(chunk)
+          : source
+            ? new Uint8Array(source)
+            : new TextEncoder().encode(String(chunk));
+        total += bytes.byteLength;
+        if (total > maxBytes) {
+          finish(() => reject(new CliUsageError(`${label} exceeds ${maxBytes} bytes`)));
+          return;
+        }
+        chunks.push(bytes);
+        retained = true;
+      } finally {
+        source?.fill(0);
+        if (!retained) bytes?.fill(0);
+      }
+    };
+    const onEnd = () => finish(() => {
+      if (total === 0) {
+        reject(new CliUsageError(`${label} input was empty`));
+        return;
+      }
+      const result = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        result.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      resolve(result);
+    });
+    const onError = (error: Error) => finish(() => reject(error));
+    const timer = setTimeout(
+      () => finish(() => reject(new CliUsageError(`timed out waiting for ${label} on stdin`))),
+      timeoutMs,
+    );
+    input.on("data", onData);
+    input.on("end", onEnd);
+    input.on("error", onError);
+  });
+}
+
 export function printData(value: unknown, wantsJson: boolean, lines?: string[]): void {
   if (wantsJson || !lines) console.log(JSON.stringify(value, null, 2));
-  else for (const line of lines) console.log(line);
+  else for (const line of lines) console.log(terminalSafeText(line));
+}
+
+/**
+ * Operator text for the Codex-config apply report a management write returns.
+ *
+ * The report shape is shared by every route that re-runs the injection on the spot: the Desktop
+ * switches (`ocx system settings`) and the web-search sidecar's master switch. One vocabulary for
+ * both, so the same failure cannot read as two different things depending on which command the
+ * operator used -- and because the reason codes are internal, the human line never prints them.
+ */
+export function desktopSwitchApplyReason(reason: unknown): string {
+  if (reason === "not_requested") return "no desktop switch rewrite was requested";
+  if (reason === "proxy_not_running") return "the proxy is not running";
+  if (reason === "integration_disabled") return "Codex integration is disabled";
+  if (reason === "external_provider") return "an external model provider owns config.toml";
+  if (reason === "ownership_undetermined") return "config.toml ownership could not be determined";
+  if (reason === "write_lock_busy") return "the Codex config write lock is busy";
+  if (reason === "injection_refused") return "Codex config injection was refused";
+  return "the rewrite could not be completed";
 }
 
 /**

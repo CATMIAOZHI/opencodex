@@ -552,7 +552,7 @@ describe("update stops the running proxy before replacing files", () => {
   test("cache access gates in both CLI entry points precede every tray/proxy stop", () => {
     const runtimeGate = updateSource.indexOf("const cachePreflight = runNpmCachePreflight();");
     const runtimeStop = updateSource.indexOf('selfLaunchArgv(["stop"])');
-    const launcherGate = launcherSource.indexOf("const cachePreflight = runNpmCachePreflight();");
+    const launcherGate = launcherSource.indexOf("runNpmCachePreflight({ cachePath: npmCache.path })");
     const launcherTrayStop = launcherSource.indexOf('runTrayLifecycle(launcher, "stop")');
     const launcherProxyStop = launcherSource.indexOf('[launcher, "stop"]');
 
@@ -561,6 +561,8 @@ describe("update stops the running proxy before replacing files", () => {
     expect(runtimeGate).toBeLessThan(runtimeStop);
     expect(launcherGate).toBeLessThan(launcherTrayStop);
     expect(launcherGate).toBeLessThan(launcherProxyStop);
+    // #6288: the stage installs into the very cache root the gate checked.
+    expect(launcherSource.indexOf("cachePath: npmCachePath,")).toBeGreaterThan(launcherSource.indexOf("transactionalNpmUpdate({"));
   });
 
   test("npm launcher update path stops via its own launcher path before npm install", () => {
@@ -829,6 +831,21 @@ esac
     expect(recovery).toContain("planStoppedRuntimeRecovery");
     expect(recovery).toContain("sameOwner:");
     expect(recovery).toContain("currentPackageRuntimeLiveness()");
+  });
+
+  test("failed-update service recovery releases the update lease before the service starts (#5760)", () => {
+    // The service manager starts the proxy outside this process tree, so it cannot join the
+    // delegated lease; it has to take the lease itself while the repair waits for it.
+    const start = launcherSource.indexOf("function recoverStoppedRuntimeAfterFailure(");
+    const recovery = launcherSource.slice(start, launcherSource.indexOf("const hasPendingTeardown", start));
+    const serviceAt = recovery.indexOf('recovery.action === "service"');
+    const releaseAt = recovery.indexOf("releaseUpdateLease()", serviceAt);
+    const replanAt = recovery.indexOf("planRecovery()", releaseAt);
+    const refreshAt = recovery.indexOf("refreshBackgroundServiceOrStartDirect()", replanAt);
+    expect(serviceAt).toBeGreaterThan(-1);
+    expect(releaseAt).toBeGreaterThan(serviceAt);
+    expect(replanAt).toBeGreaterThan(releaseAt);
+    expect(refreshAt).toBeGreaterThan(replanAt);
   });
 
   test("GUI worker update children use pipe stdio so background updates do not open consoles", () => {

@@ -51,6 +51,8 @@ export type ExemptionReason =
   | "interactive-preview"
   /** Unreachable in the live dispatch order; delete rather than expose. */
   | "dead"
+  /** Desktop shell internal display-state POST; the CLI has no app updater state to publish. */
+  | "desktop-internal"
   /**
    * A verb is owed but belongs to a later work-phase. BOUNDED: requires `owner` and
    * `ownerDoc`, and the parity test asserts that tracked doc exists and names the route.
@@ -101,6 +103,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/codex-auth/login-status", module: "codex/auth-api/routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/quota", module: "codex/auth-api/routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/quota/history", module: "codex/auth-api/routes", mutates: false },
+  { method: "GET", path: "/api/codex-auth/low-quota-events", module: "server/management/low-quota-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The authenticated event history is an operator diagnostic with no CLI verb yet.", owner: "rt5 low-quota", ownerDoc: "structure/gui-and-management-api.md" } },
   { method: "GET", path: "/api/codex-auth/reset-credits", module: "codex/auth-api/routes", mutates: false },
   { method: "PATCH", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api/routes", mutates: true },
   { method: "POST", path: "/api/codex-auth/accounts", module: "codex/auth-api/routes", mutates: true },
@@ -118,6 +121,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/codex-auth/accounts/alias", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/pause", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/pause-exhausted", module: "codex/auth-api/routes", mutates: true },
+  { method: "PUT", path: "/api/codex-auth/accounts/credits", module: "codex/auth-api/routes", mutates: true, exempt: { reason: "deferred-verb", why: "The credits switches ship on the dashboard Codex Auth header first; `ocx config set creditCodexAccountIds` covers scripted use until an account verb exists.", owner: "#6334 follow-up", ownerDoc: "structure/codex-account-controls.md" } },
   { method: "PUT", path: "/api/codex-auth/accounts/priority", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/active", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/auto-switch", module: "codex/auth-api/routes", mutates: true },
@@ -141,22 +145,37 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/effort-caps", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/grok", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/injection-model", module: "server/management/agent-settings-routes", mutates: false },
+  { method: "POST", path: "/api/injection-model/suggest", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/subagent-model-fallback", module: "server/management/agent-settings-routes", mutates: false },
-  { method: "GET", path: "/api/subagent-models", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/v2", module: "server/management/agent-settings-routes", mutates: false },
   { method: "POST", path: "/api/claude-desktop/apply", module: "server/management/agent-settings-routes", mutates: true },
   { method: "POST", path: "/api/grok/apply", module: "server/management/agent-settings-routes", mutates: true },
   { method: "GET", path: "/api/grok/reset-coupons", module: "server/management/grok-coupon-routes", mutates: false },
   { method: "POST", path: "/api/grok/reset-coupons/consume", module: "server/management/grok-coupon-routes", mutates: true },
+  { method: "GET", path: "/api/anthropic/reset-grants", module: "server/management/anthropic-reset-grant-routes", mutates: false, exempt: { reason: "deferred-verb", why: "Reading Claude reset grants has no CLI verb yet; the dashboard ticket badge is the only reader in this unit.", owner: "260923_claude_reset_grants wp1", ownerDoc: "devlog/_plan/260923_claude_reset_grants/010_plan.md" } },
+  { method: "POST", path: "/api/anthropic/reset-grants/consume", module: "server/management/anthropic-reset-grant-routes", mutates: true, exempt: { reason: "session-only", why: "Spending a Claude reset grant requires the gui-session principal (anthropic-reset-grant-routes.ts handleConsume); the admin token is refused." } },
   { method: "PUT", path: "/api/claude-code", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/claude-desktop", module: "server/management/agent-settings-routes", mutates: true },
+  { method: "PUT", path: "/api/claude-desktop/first-party-bindings", module: "server/management/agent-settings-routes", mutates: true },
+  // server/management/claude-intercept-routes
+  { method: "POST", path: "/api/claude-intercept/start", module: "server/management/claude-intercept-routes", mutates: true },
+
+  // server/management/claude-desktop-picker-routes
+  { method: "GET", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: false },
+  { method: "PUT", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/features/default-mode-request-user-input", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/effort-caps", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/grok/selection", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/injection-model", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/subagent-model-fallback", module: "server/management/agent-settings-routes", mutates: true },
-  { method: "PUT", path: "/api/subagent-models", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/v2", module: "server/management/agent-settings-routes", mutates: true },
+  // server/management/subagent-model-routes
+  { method: "GET", path: "/api/subagent-models", module: "server/management/subagent-model-routes", mutates: false },
+  { method: "PUT", path: "/api/subagent-models", module: "server/management/subagent-model-routes", mutates: true },
+  // server/management/codex-agent-role-routes
+  { method: "GET", path: "/api/codex-agent-roles", module: "server/management/codex-agent-role-routes", mutates: false },
+  { method: "POST", path: "/api/codex-agent-roles/auto-assign", module: "server/management/codex-agent-role-routes", mutates: false, mechanism: "path-constant" },
+  { method: "PUT", path: "/api/codex-agent-roles/{role}", module: "server/management/codex-agent-role-routes", mutates: true, mechanism: "prefix-decode" },
   // server/management/aside-profile-routes
   { method: "GET", path: "/api/client-integrations/aside", module: "server/management/aside-profile-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "compatibility-alias", why: "Legacy Aside status alias; the current CLI reads the same aggregate through GET /api/client-integrations/aside/profiles." } },
   { method: "PUT", path: "/api/client-integrations/aside", module: "server/management/aside-profile-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "compatibility-alias", why: "Legacy Aside toggle alias; the current CLI uses PUT /api/client-integrations/aside/profiles so older servers cannot mistake a bulk request for a current-account toggle." } },
@@ -184,6 +203,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "DELETE", path: "/api/combos", module: "server/management/combo-routes", mutates: true },
   { method: "GET", path: "/api/combos", module: "server/management/combo-routes", mutates: false },
   { method: "PUT", path: "/api/combos", module: "server/management/combo-routes", mutates: true },
+  // server/management/decision-routes
+  { method: "GET", path: "/api/combos/decision-discovery", module: "server/management/decision-routes", mutates: false },
+  { method: "POST", path: "/api/combos/decision-test", module: "server/management/decision-routes", mutates: true },
   // server/management/config-routes
   { method: "GET", path: "/api/config", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/diagnostics/project-config", module: "server/management/config-routes", mutates: false },
@@ -269,6 +291,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/disabled-models", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/model-discovery", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/model-presets", module: "server/management/model-routes", mutates: true },
+  { method: "PUT", path: "/api/model-settings", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/model-visibility", module: "server/management/model-routes", mutates: true },
   { method: "PUT", path: "/api/selected-models", module: "server/management/model-routes", mutates: true },
   // server/management/native-integration-routes
@@ -279,6 +302,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/native-integrations/grok", module: "server/management/native-integration-routes", mutates: true },
   // server/management/cursor-integration-routes
   { method: "GET", path: "/api/native-integrations/cursor", module: "server/management/cursor-integration-routes", mutates: false },
+  { method: "GET", path: "/api/native-integrations/cursor/local-installer", module: "server/management/cursor-integration-routes", mutates: false },
   // server/management/oauth-account-routes
   { method: "DELETE", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "DELETE", path: "/api/keys/rotate", module: "server/management/oauth-account-routes", mutates: true },
@@ -311,6 +335,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/providers/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/active", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/alias", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PUT", path: "/api/oauth/accounts/pause", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PUT", path: "/api/oauth/accounts/auto-switch", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/providers/keys/active", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/providers/keys/alias", module: "server/management/oauth-account-routes", mutates: true },
@@ -329,6 +355,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/quota-reset-routes
   { method: "GET", path: "/api/quota-resets", module: "server/management/quota-reset-routes", mutates: false, mechanism: "negated-guard" },
   // server/management/workflow-budget-routes
+  { method: "GET", path: "/api/protocols", module: "server/management/protocol-routes", mutates: false },
+  { method: "POST", path: "/api/protocols/plan", module: "server/management/protocol-routes", mutates: false },
+  { method: "PATCH", path: "/api/protocols/settings", module: "server/management/protocol-routes", mutates: true },
   { method: "GET", path: "/api/workflow-budget", module: "server/management/workflow-budget-routes", mutates: false, exempt: { reason: "deferred-verb", why: "Reading a root's live budget is owed a CLI verb -- an operator staring at a 429 is usually already in a terminal -- but the ledger is process memory with no local transport to read it through, so the verb has to be an HTTP call the CLI does not yet make.", owner: "260915_workflow_budget_window wfc", ownerDoc: "devlog/_plan/260915_workflow_budget_window/030_wfc_diff_plan.md" } },
   { method: "POST", path: "/api/workflow-budget/clear", module: "server/management/workflow-budget-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Clearing one root is owed the same verb as the read above and for the same reason. It is deliberately not shipped as a verb in this work-phase: the read comes first, because an operator who cannot see which ceiling fired has no basis for deciding to forgive it.", owner: "260915_workflow_budget_window wfc", ownerDoc: "devlog/_plan/260915_workflow_budget_window/030_wfc_diff_plan.md" } },
   // server/management/request-history-routes
@@ -344,6 +373,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/sidebar-routes
   { method: "GET", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: false },
   { method: "GET", path: "/api/update/badge", module: "server/management/sidebar-routes", mutates: false },
+  { method: "POST", path: "/api/update/desktop-snapshot",
+    module: "server/management/sidebar-routes", mutates: true,
+    exempt: { reason: "desktop-internal",
+      why: "Only the Tauri shell has signed-updater state to publish; a CLI verb could only forge that state and would not create an operator action." } },
   { method: "POST", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: starring spends the user's identity. Must never gain a CLI verb." } },
   // server/management/storage-log-guard-routes
   { method: "GET", path: "/api/storage/codex-logs", module: "server/management/storage-log-guard-routes", mutates: false },
@@ -351,6 +384,15 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/storage/codex-logs/protect", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/repair", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/unprotect", module: "server/management/storage-log-guard-routes", mutates: true },
+  // server/management/link-routes
+  { method: "GET", path: "/api/link/status", module: "server/management/link-routes", mutates: false },
+  { method: "GET", path: "/api/link/candidates", module: "server/management/link-routes", mutates: false, exempt: { reason: "session-only", why: "SSH candidates are a dashboard surface: a paired session, or on a standalone runtime the current loopback dashboard session on trusted loopback ingress; admin-token and Tailscale identity sessions are refused." } },
+  { method: "POST", path: "/api/link/probe", module: "server/management/link-routes", mutates: true, exempt: { reason: "session-only", why: "SSH probing and host-key presentation are part of the interactive dashboard consent flow (paired, or standalone loopback dashboard on trusted loopback ingress)." } },
+  { method: "POST", path: "/api/link/confirm-host", module: "server/management/link-routes", mutates: true, exempt: { reason: "session-only", why: "Persisting a host key requires the dashboard session that saw the fingerprint (paired, or standalone loopback dashboard on trusted loopback ingress)." } },
+  { method: "POST", path: "/api/link/join", module: "server/management/link-routes", mutates: true, exempt: { reason: "session-only", why: "Joining a confirmed Home issues a link credential and restarts this standalone runtime as a client on its configured port, which briefly interrupts running Codex turns. It requires an operator-paired dashboard session and a pre-join notice; unpaired standalone loopback, admin-token and Tailscale identity sessions are refused." } },
+  { method: "POST", path: "/api/link/apply", module: "server/management/link-routes", mutates: true, exempt: { reason: "session-only", why: "Applying a link issues a data key and starts a remote tunnel, so it requires a dashboard session (paired, or standalone loopback dashboard on trusted loopback ingress)." } },
+  { method: "DELETE", path: "/api/link/{id}", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/link/issue", module: "server/management/link-routes", mutates: true },
   // server/management/remote-workspace-routes
   { method: "GET", path: "/api/remote-workspace", module: "server/management/remote-workspace-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The first Remote Workspace slice exposes Hub status through the authenticated dashboard; a distinct CLI Hub-status verb is still owed and must not be confused with the Executor-local status command.", owner: "remote-workspace-cli-followup", ownerDoc: "docs-site/src/content/docs/reference/management-api.md" } },
   { method: "GET", path: "/api/remote-workspace/runtimes", module: "server/management/remote-workspace-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The first Remote Workspace slice exposes Hub runtime availability through the authenticated dashboard; a distinct CLI Hub-status verb is still owed.", owner: "remote-workspace-cli-followup", ownerDoc: "docs-site/src/content/docs/reference/management-api.md" } },

@@ -3,12 +3,11 @@ title: Desktop App
 description: Install and use the OpenCodex desktop app on macOS, Windows, and Linux.
 ---
 
-The OpenCodex desktop app combines a native tray with the web dashboard. It discovers an
-existing local proxy, or starts the bundled `ocx` sidecar when no proxy is running.
+The OpenCodex desktop app combines a native tray with the web dashboard. Its bundled CLI
+resolves an existing local proxy; the app starts its bundled runtime only when absence is proven.
 
-The dashboard remains available at [http://127.0.0.1:10100](http://127.0.0.1:10100).
-The desktop app does not replace the proxy; it is a local shell around the dashboard and
-its bundled runtime.
+The dashboard is served from the resolved local proxy endpoint (port `10100` by default).
+The desktop app is a local shell around that dashboard and its bundled runtime.
 
 ## Install
 
@@ -16,11 +15,11 @@ its bundled runtime.
 
 Download `OpenCodex-<version>-macos.dmg` from the
 [latest release](https://github.com/lidge-jun/opencodex/releases). Open the DMG and drag
-`OpenCodex.app` to Applications.
+`OpenCodex.app` to Applications. The app requires macOS 13 or later.
 
-On first launch, macOS Gatekeeper may warn that the developer cannot be verified. Right-click
-the app, choose **Open**, and confirm **Open**. This build is signed for integrity but is not
-yet notarized.
+Release builds of `OpenCodex.app` are signed with a Developer ID and notarized by Apple, so on
+first launch macOS normally asks only for the standard confirmation for a downloaded app. If macOS
+still blocks it, use **System Settings → Privacy & Security → Open Anyway**.
 
 ### Windows
 
@@ -50,12 +49,73 @@ The tray icon requires an AppIndicator-capable desktop environment.
 
 ## First launch
 
-The app first looks for an existing `ocx` proxy on loopback, using the runtime port
-metadata when available and falling back to port `10100`. If no proxy answers, it starts
-the bundled sidecar. The dashboard is then opened inside the app's webview.
+The app asks its bundled CLI to run `ocx resolve --json` and attaches to a reachable local
+proxy if one is already running. It starts the bundled runtime only when the CLI proves
+absence; an uncertain result is shown as a startup failure. The dashboard then opens in
+the app's webview at the resolved loopback endpoint. A login launch that starts hidden in the
+tray keeps the lightweight startup page instead, and loads the dashboard the first time you open
+it from the tray or launch the app again.
 
 Use the tray's **Open dashboard** or **Open in browser** action to move between the
 embedded dashboard and your normal browser. The tray also provides update checks.
+
+On Windows, approving **Take over** allows up to 90 seconds of startup work for the existing
+runtime to stop safely, ownership to transfer, and the bundled runtime to start. Time spent
+deciding at the prompt does not count toward this limit. Keep the app open while it finishes;
+if it fails, use **Retry** to resolve the current runtime again.
+
+On macOS, closing the dashboard keeps the app running in the menu bar. Open OpenCodex again from Dock or Finder to restore the dashboard without restarting the proxy.
+
+On Windows, **Start at Login** quotes the executable path in the current-user startup
+registration, including installations under `Program Files`. Previously enabled
+registrations are updated once on launch. Startup entries you disabled in the tray
+or Task Manager remain disabled.
+
+## Startup safety on macOS
+
+Startup safety reports **Desktop app** protection when OpenCodex's recorded ownership,
+**Start at Login** registration, and live supervision of its bundled proxy all match.
+A missing or stale check remains **At risk**. If the desktop app owns the proxy but
+protection cannot be verified, reopen OpenCodex and check **Start at Login**. Service
+and launcher installation or repair stays disabled while that ownership remains;
+`ocx restore` is still available to undo Codex routing.
+
+Normal desktop updates replace the bundled CLI with the fixed startup probe. No local
+patch needs to be preserved across an update.
+
+## Zoom
+
+On macOS and Linux, Cmd (macOS) or Ctrl (Linux) with `+`, `-` and `0`, or Ctrl with the mouse wheel,
+zooms the window between 50% and 300% in 10% steps, and `0` returns to 100%. The sidebar shows the
+same level with `-`, `+` and a reset button beside the theme and language rows. The level is
+remembered and applied again the next time the app starts. The dashboard comes from the proxy the
+app is attached to, so an app attached to an older proxy keeps the earlier behaviour (20% steps, not
+remembered, no sidebar control) until that proxy is updated. Windows uses the browser engine's own
+zoom, which is not remembered.
+
+## Keeping the proxy running
+
+The app keeps the proxy it started running. When that proxy restarts itself — after
+**Connect as Child**, a memory restart from the dashboard, or disconnecting a Child — the app
+starts the new proxy on the same port, usually within about a second (a few seconds when the proxy
+already restarted in the last two minutes), and reloads the open dashboard, so the
+tray's Stop still reaches it and Quit still ends it. If the proxy exits without being asked (a
+crash, or `ocx stop` from a terminal), the app starts it again after a short delay that grows from
+3 to 30 seconds while the proxy keeps failing. If the proxy stops answering on its port, the app
+notices within about 15 seconds and recovers the same way; for a proxy it did not start (a
+background service, or one you started yourself), it first waits about a minute for that proxy to
+come back. While recovering, it never stops or replaces a proxy that something else already runs on
+that port; it attaches to that one instead, without asking to take it over. That includes a Child's
+proxy that a background service restarted after **Connect as Child**: the app attaches to it and
+shows the Child's dashboard. If the port is held by something the app cannot use, such as a proxy
+bound to an address other than `127.0.0.1`, the app stops retrying and waits for that to change. A
+recovery that finishes while the update page is open leaves that page on screen.
+
+The tray's **Stop proxy** and **Quit** keep the proxy stopped. The dashboard's own **Stop** button
+does not stop a proxy the app runs, because the app would start it again: it says so and changes
+nothing. What the app decided and why is
+recorded in `runtime-supervisor.log` in the app's log directory (`~/Library/Logs/com.opencodex.desktop`
+on macOS).
 
 ## Usage in the tray
 
@@ -92,7 +152,19 @@ whole-number zeros: ten million tokens is `10M`, not `1M`.
 ## Updates
 
 Choose **Check for Updates…** in the tray menu to check immediately. Release builds also
-check automatically after startup and every six hours. Updates are verified with the
+check automatically after startup and every six hours.
+
+When the Tauri updater finds a newer app version, a blue dot appears on the macOS menu-bar icon or the Windows/Linux tray icon where a tray host is available. The embedded dashboard shows the same desktop update signal. A normal browser connected to the same proxy still shows the proxy package update state. If the shell stops reporting for about three minutes, the embedded badge becomes unknown until it reconnects. The dot reports availability; installation remains an explicit action.
+
+In the desktop app, choose the dashboard's update button to open the app's update page.
+There you can check again, install a pending signed update, or return to the dashboard.
+The same install action is available from the tray menu. If installation fails, the
+pending update remains available for retry. The app also brings back the proxy it stopped for
+the install, so a failed update does not leave Codex without one. This page also works on Linux when the
+desktop has no tray icon. A normal browser dashboard manages the package installation
+on that proxy instead.
+
+Updates are verified with the
 project's signed updater public key before installation. On macOS, in-app updates download
 `OpenCodex-<version>-macos.app.tar.gz`; the DMG is for the first installation.
 The release manifest is generated only when the updater key secret is configured and then
@@ -101,8 +173,8 @@ requires all four platforms to be signed.
 ## Widget
 
 The macOS app includes the OpenCodex WidgetKit extension. See the
-[macOS Menu Bar App guide](/opencodex/guides/macos-menu-bar/) for widget setup and the
-privacy-safe snapshot details.
+[macOS Menu Bar App guide](/guides/macos-menu-bar/) for widget setup and the
+local snapshot details.
 
 ## Uninstall
 

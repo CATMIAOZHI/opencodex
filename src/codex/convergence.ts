@@ -1,3 +1,4 @@
+import { projectAntigravitySelectedModels } from "../providers/antigravity-effort-families";
 import { join } from "node:path";
 
 import { getConfigDir, saveConfigPreservingClaudeCode, websocketsEnabled, withExpectedConfigGenerationSync } from "../config";
@@ -74,6 +75,7 @@ import { suppressedSyntheticMaxCatalogSlugs } from "./catalog/model-hints";
 import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "./account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
+import { applyNativeAccessPrograms } from "./catalog/access-programs";
 import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
@@ -346,7 +348,7 @@ function prepareCatalog(
   const selectedModelsByProvider = new Map<string, ReadonlySet<string>>(
     enabledProviders.flatMap(([name, provider]) => (
       Array.isArray(provider.selectedModels) && provider.selectedModels.length > 0
-        ? [[name, new Set(provider.selectedModels)] as const]
+        ? [[name, new Set(projectAntigravitySelectedModels(name, provider.selectedModels, routedModels))] as const]
         : []
     )),
   );
@@ -384,6 +386,7 @@ function prepareCatalog(
       warningPolicy: "suppress",
     },
   });
+  applyNativeAccessPrograms(mergedModels, modelEntitlements, accountTargets);
   clampCatalogModelsToObservedCodexSupport(
     mergedModels,
     source.runtimeSupport.kind === "available"

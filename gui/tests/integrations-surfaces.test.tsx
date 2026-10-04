@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
+import { setClientResourceData } from "../src/client-resource";
 
 /**
  * Mounted behavior for the Integrations surfaces.
@@ -237,7 +238,7 @@ afterEach(async () => {
 
 async function mountClient(
   active = true,
-  client: "hermes" | "dsh" = "hermes",
+  client: "hermes" | "dsh" | "kilo" | "droid" = "hermes",
 ): Promise<void> {
   const [{ createRoot }, { LanguageProvider }, { default: FileIntegrationPage }] = await Promise.all([
     import("react-dom/client"),
@@ -262,7 +263,7 @@ async function mountClient(
  * replays the first response and the new `stateResponse` has no effect. Rotating
  * the base is what makes a state sweep in a single test possible at all.
  */
-async function remountClient(client: "hermes" | "dsh" = "hermes"): Promise<void> {
+async function remountClient(client: "hermes" | "dsh" | "kilo" | "droid" = "hermes"): Promise<void> {
   if (root) {
     const current = root;
     await act(async () => { current.unmount(); });
@@ -291,6 +292,116 @@ test("the DSH surface uses localized ownership semantics and its own API route",
   expect(text).toContain("deepseek-official");
   expect(text).toContain("loopback");
   expect(requests.some(request => request.url.endsWith("/api/client-integrations/dsh"))).toBe(true);
+});
+
+test("Droid reasoning defaults use one frozen snapshot for review and commit", async () => {
+  let savedDefaults: Record<string, string> = {};
+  stateResponse = () => json(status({
+    clientId: "droid",
+    configPath: "/tmp/factory/settings.json",
+    droidReasoning: {
+      models: [{ model: "openai/gpt-test", label: "Test model", efforts: ["low", "high"] }],
+      defaults: savedDefaults,
+    },
+  }));
+  putResponse = request => {
+    savedDefaults = (request.body as { droidReasoningDefaults?: Record<string, string> }).droidReasoningDefaults ?? {};
+    return json({ ok: true, clientId: "droid", changed: true, state: "current", message: "saved" });
+  };
+  await mountClient(true, "droid");
+
+  expect(container.textContent).toContain("A default is used only when a request omits its reasoning effort");
+  expect(buttonByText("Save / review changes")?.disabled).toBe(false);
+  const selector = container.querySelector<HTMLButtonElement>('[role="combobox"]')!;
+  await act(async () => { selector.click(); });
+  const high = Array.from(testWindow.document.querySelectorAll('[role="option"]')).find(option => option.textContent === "high") as HTMLButtonElement;
+  await act(async () => { high.click(); });
+  await act(async () => { buttonByText("Save / review changes")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+
+  const preview = requests.find(request => request.method === "POST" && request.url.endsWith("/api/client-integrations/preview"));
+  expect(preview?.body).toMatchObject({
+    clientId: "droid",
+    operation: "apply",
+    droidReasoningDefaults: { "openai/gpt-test": "high" },
+  });
+  expect(container.querySelector<HTMLButtonElement>('[role="combobox"]')?.disabled).toBe(true);
+  await confirmDialog("Apply");
+
+  const mutation = requests.find(request => request.method === "PUT" && request.url.endsWith("/api/client-integrations/droid"));
+  expect(mutation?.body).toMatchObject({
+    enabled: true,
+    droidReasoningDefaults: { "openai/gpt-test": "high" },
+  });
+  expect(savedDefaults).toEqual({ "openai/gpt-test": "high" });
+  expect(container.querySelector<HTMLButtonElement>('[role="combobox"]')?.disabled).toBe(false);
+
+  savedDefaults = { "openai/gpt-test": "low" };
+  await act(async () => {
+    setClientResourceData(`integration-state:${apiBase}:droid`, status({
+      clientId: "droid",
+      configPath: "/tmp/factory/settings.json",
+      droidReasoning: {
+        models: [{ model: "openai/gpt-test", label: "Test model", efforts: ["low", "high"] }],
+        defaults: savedDefaults,
+      },
+    }));
+  });
+  expect(container.querySelector<HTMLButtonElement>('[role="combobox"]')?.textContent).toContain("low");
+});
+
+test.each(["Update", "Save / review changes"])("Droid %s omits unsupported saved defaults while an explicit edit stays frozen through confirm", async (action) => {
+  stateResponse = () => json(status({
+    clientId: "droid",
+    state: "stale",
+    configPath: "/tmp/factory/settings.json",
+    droidReasoning: {
+      models: [{ model: "openai/gpt-test", label: "Test model", efforts: ["low"] }],
+      defaults: { "openai/gpt-test": "high" },
+    },
+  }));
+  await mountClient(true, "droid");
+
+  await act(async () => { buttonByText(action)!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+  const refreshPreview = requests.find(request => request.method === "POST" && request.url.endsWith("/api/client-integrations/preview"));
+  expect(refreshPreview?.body).not.toHaveProperty("droidReasoningDefaults");
+
+  await confirmDialog("Apply");
+  const unchangedMutation = requests.find(request => request.method === "PUT" && request.url.endsWith("/api/client-integrations/droid"));
+  expect(unchangedMutation).toBeDefined();
+  expect(unchangedMutation?.body).not.toHaveProperty("droidReasoningDefaults");
+
+  const selector = container.querySelector<HTMLButtonElement>('[role="combobox"]')!;
+  await act(async () => { selector.click(); });
+  const low = Array.from(testWindow.document.querySelectorAll('[role="option"]')).find(option => option.textContent === "low") as HTMLButtonElement;
+  await act(async () => { low.click(); });
+  await act(async () => { buttonByText("Save / review changes")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+
+  const previews = requests.filter(request => request.method === "POST" && request.url.endsWith("/api/client-integrations/preview"));
+  expect(previews[1]?.body).toMatchObject({ droidReasoningDefaults: { "openai/gpt-test": "low" } });
+  expect(container.querySelector<HTMLButtonElement>('[role="combobox"]')?.disabled).toBe(true);
+  await confirmDialog("Apply");
+  const mutation = requests.filter(request => request.method === "PUT" && request.url.endsWith("/api/client-integrations/droid")).at(-1);
+  expect(mutation?.body).toMatchObject({ droidReasoningDefaults: { "openai/gpt-test": "low" } });
+});
+
+test("Droid explicitly clearing its last default sends an empty map for review and commit", async () => {
+  stateResponse = () => json(status({ clientId: "droid", droidReasoning: {
+    models: [{ model: "openai/gpt-test", label: "Test model", efforts: ["low"] }],
+    defaults: { "openai/gpt-test": "low" },
+  } }));
+  await mountClient(true, "droid");
+  await act(async () => { container.querySelector<HTMLButtonElement>('[role="combobox"]')!.click(); });
+  const clear = [...testWindow.document.querySelectorAll('[role="option"]')].find(option => option.textContent === "No default") as HTMLButtonElement;
+  await act(async () => { clear.click(); });
+  await act(async () => { buttonByText("Save / review changes")!.click(); });
+  const preview = requests.find(request => request.method === "POST" && request.url.endsWith("/api/client-integrations/preview"));
+  expect(preview?.body).toHaveProperty("droidReasoningDefaults", {});
+  await confirmDialog("Apply");
+  const mutation = requests.find(request => request.method === "PUT" && request.url.endsWith("/api/client-integrations/droid"));
+  expect(mutation?.body).toHaveProperty("droidReasoningDefaults", {});
 });
 
 function buttons(): HTMLButtonElement[] {
@@ -437,6 +548,43 @@ test("a conflict offers an overwrite, and no other state does", async () => {
   stateResponse = () => json(status({ state: "conflict", reason: "unowned-key" }));
   await remountClient();
   expect(buttonByText("Replace")).toBeDefined();
+});
+
+test("Kilo candidate conflict names the other file and offers no overwrite", async () => {
+  const path = "/tmp/home/.config/kilo/opencode.jsonc";
+  stateResponse = () => json(status({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", conflictPaths: [path] }));
+  await mountClient(true, "kilo");
+  expect(buttonByText("Replace")).toBeUndefined();
+  expect(container.textContent).toContain(path);
+  expect(container.textContent).toContain("Remove provider.opencodex from that file");
+});
+
+test("an owned Kilo candidate conflict still offers Disable", async () => {
+  const path = "/tmp/home/.config/kilo/opencode.jsonc";
+  stateResponse = () => json(status({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", conflictPaths: [path], lastOpId: "owned-operation" }));
+  await mountClient(true, "kilo");
+  const sw = toggleSwitch();
+  expect(sw.disabled).toBe(false);
+  expect(sw.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => { sw.click(); });
+  await confirmDialog("Disable");
+  expect(requests.find(request => request.method === "PUT")?.body).toEqual({
+    enabled: false, operation: "disable", planFingerprint: previewPlan("disable").fingerprint,
+  });
+});
+
+test("Kilo can disable past an unsafe later candidate, but not an unsafe selected file", async () => {
+  const configPath = "/tmp/home/.config/kilo/kilo.jsonc";
+  stateResponse = () => json(status({ clientId: "kilo", configPath, state: "unsafe", reason: "unparseable",
+    candidateFailurePath: "/tmp/home/.config/kilo/opencode.jsonc", lastOpId: "owned-operation" }));
+  await mountClient(true, "kilo");
+  expect(toggleSwitch().disabled).toBe(false);
+  expect(toggleSwitch().getAttribute("aria-pressed")).toBe("true");
+
+  stateResponse = () => json(status({ clientId: "kilo", configPath, state: "unsafe", reason: "unparseable",
+    candidateFailurePath: configPath, lastOpId: "owned-operation" }));
+  await remountClient("kilo");
+  expect(toggleSwitch().disabled).toBe(true);
 });
 
 test("a client with no config on disk is never offered an overwrite", async () => {
@@ -678,6 +826,41 @@ async function mountOverview(): Promise<void> {
   });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
 }
+
+test("overview names a competing Kilo file without offering Replace", async () => {
+  const path = "/tmp/home/.config/kilo/config.json";
+  stateResponse = () => json({ clients: [status({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", conflictPaths: [path] })] });
+  await mountOverview();
+  const card = container.querySelector('.integration-card[data-client="kilo"]')!;
+  expect(card.textContent).toContain(path);
+  expect(Array.from(card.querySelectorAll("button")).some(button => button.textContent?.trim() === "Replace")).toBe(false);
+});
+
+test("overview allows disabling an owned Kilo block during candidate conflict", async () => {
+  const path = "/tmp/home/.config/kilo/config.json";
+  stateResponse = () => json({ clients: [status({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", conflictPaths: [path], lastOpId: "owned-operation" })] });
+  await mountOverview();
+  const card = container.querySelector('.integration-card[data-client="kilo"]')!;
+  const sw = card.querySelector("button.switch") as HTMLButtonElement;
+  expect(sw.disabled).toBe(false);
+  expect(sw.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => { sw.click(); });
+  expect(requests.some(request => request.url.endsWith("/api/client-integrations/preview")
+    && (request.body as { operation?: string }).operation === "disable")).toBe(true);
+});
+
+test("Disable all includes an owned Kilo block with an off-target candidate conflict", async () => {
+  const path = "/tmp/home/.config/kilo/config.json";
+  stateResponse = () => json({ clients: [status({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", conflictPaths: [path], lastOpId: "owned-operation" })] });
+  await mountOverview();
+  const disableAll = buttonByText("Disable all…");
+  expect(disableAll?.disabled).toBe(false);
+  await act(async () => { disableAll!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+  expect(requests.some(request => request.url.endsWith("/api/client-integrations/preview")
+    && (request.body as { clientId?: string; operation?: string }).clientId === "kilo"
+    && (request.body as { operation?: string }).operation === "disable")).toBe(true);
+});
 
 test("the overview reconciles a journal row another tab already deleted", async () => {
   stateResponse = () => json({ clients: [status()] });
@@ -1313,7 +1496,7 @@ test("every reachable client gets a card, not just the file six", async () => {
     ".integration-card[data-client='claudeDesktop'] .integration-card-link",
   ) as unknown as HTMLButtonElement | null;
   await act(async () => { desktopLink!.click(); });
-  expect(testWindow.location.hash).toBe("#integrations/claude/desktop");
+  expect(testWindow.location.hash).toBe("#claude/desktop");
 });
 
 test("Codex disable uses Codex consequences and refreshes observed routing", async () => {
@@ -1560,4 +1743,26 @@ test("the tab strip marks every client tab and leaves the two non-client tabs ba
   // The label lost its "CLI": the mark carries that identity now, and the row
   // covers the app and SDK too.
   expect(codexTab.textContent).toBe("Codex");
+});
+
+test("Droid target changes discard the draft and its confirmation", async () => {
+  stateResponse = () => json(status({ clientId: "droid", droidReasoning: {
+    models: [{ model: "openai/gpt-test", label: "Test model", efforts: ["low", "high"] }], defaults: {},
+  } }));
+  await mountClient(true, "droid");
+  await act(async () => { container.querySelector<HTMLButtonElement>('[role="combobox"]')!.click(); });
+  const high = [...testWindow.document.querySelectorAll('[role="option"]')].find(option => option.textContent === "high") as HTMLButtonElement;
+  await act(async () => { high.click(); });
+  await act(async () => { buttonByText("Save / review changes")!.click(); });
+  expect(container.querySelector("dialog[open]")).not.toBeNull();
+  const [{ LanguageProvider }, { default: FileIntegrationPage }] = await Promise.all([
+    import("../src/i18n/provider"), import("../src/pages/integrations/FileIntegrationPage"),
+  ]);
+  const originalBase = apiBase;
+  for (const target of [`${originalBase}/other`, originalBase]) {
+    await act(async () => { root!.render(<LanguageProvider><FileIntegrationPage apiBase={target} client="droid" /></LanguageProvider>); });
+    expect(container.querySelector("dialog[open]")).toBeNull();
+    expect(container.querySelector('[role="combobox"]')?.textContent).toContain("No default");
+  }
+  expect(requests.some(request => request.method === "PUT")).toBe(false);
 });

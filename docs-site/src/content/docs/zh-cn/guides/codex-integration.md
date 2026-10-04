@@ -142,7 +142,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-在 WSL 中，如果未设置 `CODEX_HOME`，且 Linux 侧的 `~/.codex/config.toml` 不存在，opencodex 还会检查
+在 WSL 中，如果未设置 `CODEX_HOME`，且 Linux 侧的 `~/.codex` 目录不存在或不含任何 Codex 状态（`config.toml`, `auth.json`, `sessions`, `history.jsonl`），opencodex 还会检查
 `/mnt/c/Users/*/.codex/config.toml` 下是否存在单一的 Windows Codex Desktop home。只要候选项恰好只有一个，
 它就会使用那个目录，让 WSL app-server mode 和 Windows Codex Desktop 共享同一份 config 与 auth 文件。
 如需覆盖这一检测，请显式设置 `CODEX_HOME`。
@@ -201,6 +201,12 @@ Codex 显示的模型来自一个磁盘上的 catalog（默认是 `$CODEX_HOME/o
 命令通过 `write_stdin` 轮询。如果原生路由 Responses、Kiro 或 Cursor 路径上的 code-mode exec
 结果仍包含宿主的某条失败消息，opencodex 会追加一行提示，指出对应规则。此变更不会重写模型的
 代码或补丁文本。
+
+如果路由模型误把 `{"cmd":"git status --short"}` 这样的 shell 参数对象传给 code-mode `exec`，
+opencodex 会在确认工具目录为 code mode 且内容无歧义时，将它转换为调用
+`tools.exec_command(...)` 并通过 `text(...)` 返回结果的 JavaScript。shell 选项会保留，
+命令执行与权限检查仍由 Codex 处理。合法的 JavaScript 后备字段、歧义对象和其他工具命名空间
+不会被转换；这项兼容修复不会绕过提供方限流，也不改变配置的重试策略。
 
 所选 provider 必须支持 function/tool calling。不支持 tool call 的 text-only provider 无法使用 `exec`、
 Browser 或 Computer Use。原生 OpenAI 条目会保持其上游 tool mode 不变。
@@ -319,6 +325,8 @@ fallback 行为，参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
 
 `ocx account refresh openai` 和 `ocx account list openai --quota --refresh` 仅查询用量。模型验证会消耗配额，因此需要用户的仪表板会话：配额恢复后，打开 `ocx gui` 并点击 **Refresh quotas**。无界面主机也需要通过浏览器访问其仪表板；仅凭管理员令牌无法授权验证。暂停的账号可以完成验证，但不会因此恢复或被选中。模型授权错误会一直显示，直到验证或重新登录成功。
 
+在 **Codex Set → Multi-auth** 中，打开 **Codex Auth** 标题栏中的 **Codex 额度** 开关，即可在 Week 下方显示主账号和各池账号最近查询到的积分。默认关闭，并保存为 `showCodexCredits`。余额按地区格式显示；上游报告时会显示无限额或超额使用上限警告。由于没有积分总上限，条形表示可用状态而非百分比。此开关仅控制显示，新登录需等待其自身的查询结果。
+
 后台重新验证是独立功能，默认关闭。它要求 Token Guardian、`openai` 的 `proactive` 刷新策略及 `tokenGuardian.codexWarmupEnabled`，并跳过等待注册验证的账号。
 
 ### 账号停止处理请求的原因
@@ -350,7 +358,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-当 opencodex 作为受管的 [background service](/reference/cli/#ocx-service) 运行时，它会设置
+当 opencodex 作为受管的 [background service](/zh-cn/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove) 运行时，它会设置
 `OCX_SERVICE=1`，这样由服务驱动的重启**不会**反复改写 Codex config——只有显式的
 `ocx stop` / `ocx service stop` 才会恢复原生 Codex。
 

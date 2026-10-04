@@ -67,7 +67,7 @@ export interface StopSummaryJson {
   schema: typeof STOP_SUMMARY_SCHEMA;
   /** Strict exit-code view: true only for exit 0. */
   ok: boolean;
-  outcome: "stopped" | "not-running" | "history-incomplete" | "history-deferred" | "failed";
+  outcome: "stopped" | "not-running" | "history-incomplete" | "history-deferred" | "failed" | "approval-changed" | "manager-still-active";
   exitCode: number;
   /** True when this stop left no proxy of this home running by its own paths. */
   runtimeDown: boolean;
@@ -76,6 +76,11 @@ export interface StopSummaryJson {
   sharedTeardown: StopSharedTeardownOutcome;
   /** One stable human-readable line for a caller's UI. */
   message: string;
+  /**
+   * The single guard fact that failed on a `approval-changed` refusal, when the
+   * run can name one. Additive on `ocx-stop/1`; absent on every other outcome.
+   */
+  detail?: string;
 }
 
 /** What handleStop returns: the pre-existing boolean plus the structured twin. */

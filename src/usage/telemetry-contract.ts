@@ -26,6 +26,7 @@ export const ATTEMPT_RECOVERY_KIND_ROSTER = Object.freeze([
   "transient-5xx",
   "connection-reset",
   "oauth-401",
+  "oauth-account-403",
   "key-401",
   "key-429",
   "rate-limit-429",
@@ -36,6 +37,7 @@ export const ATTEMPT_RECOVERY_KIND_ROSTER = Object.freeze([
   "opaque-blob-rejection",
   "empty-completion",
   "reasoning-effort-downgrade",
+  "anthropic-fast-downgrade",
 ] as const);
 
 export type AttemptRecoveryKind = typeof ATTEMPT_RECOVERY_KIND_ROSTER[number];

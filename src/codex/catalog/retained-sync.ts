@@ -1,16 +1,20 @@
+import { projectAntigravitySelectedModels } from "../../providers/antigravity-effort-families";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig, websocketsEnabled } from "../../config";
+import { initializeConfigOwnership } from "../../lib/config-ownership";
+import { getConfigDir, loadConfig, websocketsEnabled } from "../../config";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { legacyCustomModelCatalogSlugs } from "../custom-model-catalog-migration";
 import { getCodexHome } from "../paths";
 import type { OcxConfig } from "../../types";
 import { pendingModelSelectionProviders } from "../../providers/initial-model-selection";
+import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { COMBO_NAMESPACE } from "../../combos";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
+import { applyNativeAccessPrograms } from "./access-programs";
 import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
@@ -265,6 +269,7 @@ function catalogModelsForMergeWithNativeRecovery(
   ]);
 }
 
+/** Merge retained rows, project confirmed account metadata, and publish only changed catalog bytes. */
 function writeRetainedCatalogSync({
   config,
   goModels,
@@ -289,6 +294,8 @@ function writeRetainedCatalogSync({
     // (later syncs would otherwise overwrite it with featured-modified priorities).
     const pristine = pristineCatalogBytes(read);
     if (pristine !== null) {
+      // Initialize metadata while the root is empty; never pre-claim the hashed path.
+      initializeConfigOwnership(getConfigDir());
       publishHashedCodexCatalogBackup(permit, owningCodexHome, {
         path: catalogBackupPathFor(catalogPath),
         content: pristine,
@@ -459,7 +466,7 @@ function writeRetainedCatalogSync({
       provider.disabled !== true
         && Array.isArray(provider.selectedModels)
         && provider.selectedModels.length > 0
-        ? [[name, new Set(provider.selectedModels)] as const]
+        ? [[name, new Set(projectAntigravitySelectedModels(name, provider.selectedModels, goModels))] as const]
         : []
     )),
   );
@@ -523,6 +530,7 @@ function writeRetainedCatalogSync({
       warningPolicy: "emit",
     },
   });
+  applyNativeAccessPrograms(catalog.models, modelEntitlements, accountTargets);
   clampCatalogModelsToCodexSupport(catalog.models);
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
   // Last mutation before serialization; see `enforceCatalogSlugUniqueness` for why the ordering
@@ -596,10 +604,13 @@ export async function syncCatalogModels(
     evidence: retainedCatalogSyncEvidence(config, preflightRead.catalogPath, preflightRead.catalog),
     processEvidence: retainedCatalogProcessEvidence(),
   };
+  const discoveryBaseline = captureModelDiscoveryBaseline(config);
+  const providerContentRevisions = new Map<string, string>();
   const [goModels, modelEntitlements] = await Promise.all([
     gatherRoutedModels(config, {
       comboOmissions,
       providerModelOutcomes,
+      providerContentRevisions,
     }),
     resolveAdmittedCodexModelEntitlements(config),
   ]);
@@ -623,6 +634,11 @@ export async function syncCatalogModels(
     const current = revalidateRetainedCatalogSync(config, prepared);
     if (current === null) return null;
     if (!isCodexModelEntitlementSnapshotCurrent(modelEntitlements)) return null;
+    // Revalidate before adopting discovery: its scoped config mutation would otherwise
+    // invalidate our own evidence. K -> C is the catalog/config lock order.
+    if (!finalizeModelDiscovery(config, discoveryBaseline, goModels,
+      providerModelOutcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider),
+      providerContentRevisions)) return null;
     return writeRetainedCatalogSync({
       config,
       goModels,
@@ -649,11 +665,13 @@ export async function syncCatalogModels(
   };
 }
 
-export function invalidateCodexModelsCacheWithPermit(
+export type CodexCacheInvalidationOutcome = "written" | "unchanged" | "missing_catalog" | "desired_disabled" | "failed";
+
+export function invalidateCodexModelsCacheWithPermitOutcome(
   permit: CatalogWritePermit,
   owningCodexHome: string,
   options?: CodexCatalogSyncOptions,
-): boolean {
+): CodexCacheInvalidationOutcome {
   try {
     // This permit is a REACQUISITION: refreshCodexModelCatalog's commit released
     // K before this rewrite runs, so the commit-path desired-state check cannot
@@ -661,9 +679,9 @@ export function invalidateCodexModelsCacheWithPermit(
     // routed cache write — re-read intent under this permit, same as the commit.
     // The catalog-only sync override applies here too so an explicit refresh
     // keeps the cache consistent with the catalog it just wrote.
-    if (!shouldSyncCodexOnStart(loadConfig()) && options?.allowWhenDesiredDisabled !== true) return false;
+    if (!shouldSyncCodexOnStart(loadConfig()) && options?.allowWhenDesiredDisabled !== true) return "desired_disabled";
     const catalogPath = readCodexCatalogPathForHome(owningCodexHome);
-    if (!existsSync(catalogPath)) return false;
+    if (!existsSync(catalogPath)) return "missing_catalog";
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
     const models = catalog.models ?? catalog;
     const cachePath = join(owningCodexHome, "models_cache.json");
@@ -711,12 +729,20 @@ export function invalidateCodexModelsCacheWithPermit(
     // `cacheSynced` mean what its name and its consumers already assume, and what
     // `pullRemoteCatalog` and the early returns in `refreshCodexModelCatalog`
     // already assert: a write happened.
-    if (!preparedBytesDifferFromDisk(preparedCache)) return false;
+    if (!preparedBytesDifferFromDisk(preparedCache)) return "unchanged";
     replaceCodexModelsCache(permit, owningCodexHome, preparedCache);
-    return true;
+    return "written";
   } catch {
-    return false;
+    return "failed";
   }
+}
+
+export function invalidateCodexModelsCacheWithPermit(
+  permit: CatalogWritePermit,
+  owningCodexHome: string,
+  options?: CodexCatalogSyncOptions,
+): boolean {
+  return invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, options) === "written";
 }
 
 export function invalidateCodexModelsCache(options?: CodexCatalogSyncOptions): boolean {

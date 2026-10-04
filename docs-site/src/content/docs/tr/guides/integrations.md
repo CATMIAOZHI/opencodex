@@ -1,10 +1,10 @@
 ---
 title: Entegrasyonlar
-description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast ve omo'yu opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
+description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo ve Factory Droid'u opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
 ---
 
 **Entegrasyonlar** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
-yapılandırma dosyasına yazar ve tekrar kaldırır. On beş istemci bu şekilde
+yapılandırma dosyasına yazar ve tekrar kaldırır. On yedi istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
@@ -24,6 +24,10 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. On beş istemci bu şekild
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | kaydedildiği anda — Raycast dosyayı izler | yok — yalnızca geri döngü |
 | omo | `~/.omo/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | kapatıp yeniden başlattıktan sonra | yalnızca loopback |
+| Kilo | `~/.config/kilo` altında ilk bulunan `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` veya `config.json` (`XDG_CONFIG_HOME` bu dizini taşır; hiçbiri yoksa `kilo.jsonc` oluşturulur) | JSONC | yeni oturumlarda | `OPENCODEX_KILO_API_KEY` |
+| Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows'ta) | JSON | dosya değişince hemen | anahtarsız geri döngü |
+
+Desteklenen akıl yürütme düzeylerine sahip GJC modelleri, GJC'nin düzey seçimi sunabilmesi için `reasoning: true`, `thinking.levels` ve `compat.supportsReasoningEffort` alanlarını dışa aktarır. Yerel Codex modelleri, katalogda belirtilmese bile standart düzeylerini alır. Bilinen düzeyi olmayan modellerde bu alanlar bulunmaz. `none` düzey göndermez ve `ultra` gönderimde `max` düzeyine dönüşür; bu yüzden seçeneklerde yer almazlar. Model seçeneklerini güncellemek için entegrasyonu yenileyin.
 
 Yönetilen DSH desteğinin en düşük uyumlu sürümü **DSH 0.1.0-rc.6**'dır. OpenCodex yalnızca
 `llm-pi-ai.providers.opencodex` bölümünü yönetir: Uygula ve Yenile bu bölümü değiştirir, Devre Dışı
@@ -155,6 +159,8 @@ Kimi Code, gjc, MiniMax Code, Raycast — bütün belge olarak yazılan YAML, JS
 kendi girdilerimiz düzenlenmişse, anahtar kilitlenir ve hangi düzenlemelerin
 size ait olduğunu tahmin etmek yerine devre dışı bırakmayı reddeder.
 
+Hermes istisnası: yönetilen bloğa yalnızca `session_affinity_header: session-id` eklenmişse **Apply** ile benimsenebilir; diğer yönetilen alan değişiklikleri çakışma olarak kalır. Uygulanana kadar arka plandaki model listesi güncellemeleri de bekletilir. Ayar provider içindeki tüm modeller için geçerlidir ve bu özelliği destekleyen bir Hermes sürümü gerektirir; önbellek isabet oranı garanti edilmez. [İngilizce yükseltme açıklamasına](/guides/integrations/#hermes-session-affinity) bakın.
+
 ## Değişiklikleri önizleyin ve onaylayın
 
 Uygula, Değiştir, Devre dışı bırak ve Geri yükle işlemleri artık bir önizlemeyle başlar. İletişim
@@ -217,7 +223,10 @@ asla gerçek bir kimlik bilgisi yazılmaz.
 **`ocx opencode` için başlatıcının sağlayıcı bloğu kazanır.** Bu başlatıcı,
 `provider.opencodex`'i diskteki aynı girdiden üstün olan
 `OPENCODE_CONFIG_CONTENT` aracılığıyla enjekte eder — opencode yapılandırmanızın
-geri kalanı her zamanki gibi geçerli olmaya devam eder. Buradaki anahtar,
+geri kalanı her zamanki gibi geçerli olmaya devam eder. Başlatıcının yazdığı bloklar,
+dışa aktarımlarla aynı geçerli kanonik model meta verisinden (bilinen yetenekler ve
+akıl yürütme seçenekleri) kurulur; bilinmeyen değerler uydurulmaz, yalnızca çıkış sınırı
+bilinmiyorsa şemanın zorunlu 32000 yedeğine (bağlama göre kırpılmış) düşer. Buradaki anahtar,
 `opencode`'u doğrudan başlattığınızda önemlidir.
 
 ## Terminalden
@@ -250,11 +259,12 @@ ocx mcode
 ```
 
 Bağlandıktan sonra `ocx sync` ve `POST /api/sync`, yönetilen MCode, Pi, Aside,
-Raycast ve omo kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast
+Raycast, omo, OpenCode ve Kilo kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast
 kataloğunu yeniler. Model görünürlüğü, sağlayıcı veya ön ayar değişiklikleri Pi,
-Aside, Raycast ve omo kataloglarını günceller. Eksik, dışarıdan düzenlenmiş, güvenli olmayan
+Aside, Raycast, omo, OpenCode ve Kilo kataloglarını günceller. Eksik, dışarıdan düzenlenmiş, güvenli olmayan
 veya elle kaldırılmış bloklara dokunmaz; yeniden bağlamak istediğinizde
-entegrasyonu açıkça etkinleştirin.
+entegrasyonu açıkça etkinleştirin. Güncellenen dosyayı yüklemek için yeni bir
+Pi, OpenCode veya Kilo oturumu başlatın.
 
 Ayrı MiniMax platform CLI'si (`mmx`) bir dosya anahtarı entegrasyonu değildir.
 Metin komutları MiniMax'ın Anthropic uyumlu uç noktasını kullandığı için OpenCodex,
@@ -320,3 +330,17 @@ ocx integration client restore --op <operation-id>
 ```
 
 [CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).
+
+## Kilo
+
+Kilo yalnızca `~/.config/kilo` altındaki ilk mevcut genel dosyada `provider.opencodex` yazar (`XDG_CONFIG_HOME` bu dizini taşır; hiçbir aday yoksa `kilo.jsonc` oluşturulur). Başka bir aday dosya da `provider.opencodex` tanımlıyorsa durum çakışma bildirir ve Uygula işlemi reddedilir. Diğer anahtarlar değişmez. Modellerin akıl yürütme seçenekleri, sağlayıcı bloğu içinde bir varyant haritası olarak OpenCode dışa aktarımıyla aynı geçerli kanonik meta veriden yazılır. `ocx sync` ve `POST /api/sync` OpenCodex'e ait Kilo bloğunu yeniler; güncellenen dosyayı yeni bir Kilo oturumu yükler. Uygula dosyanın tamamını yeniden yazar; yorumlar ve sondaki virgüller korunmaz. Kilo’da `opencodex/<model>` seçin.
+
+Başka bir aday çakışsa veya ayrıştırılamasa bile Devre Dışı Bırak, kaydedilen dosyadaki OpenCodex'e ait bloğu kaldırabilir; diğer aday dosya değişmez.
+
+```bash
+ocx integration client enable --client kilo
+```
+
+## Factory Droid
+
+Factory Droid, `~/.factory/settings.json` dosyasını (Windows'ta `%USERPROFILE%\.factory\settings.json`) kullanır. `ocx integration client enable --client droid` komutuyla açıkça etkinleştirin, ardından `/model` içinde özel bir model seçin. Yönetilen satırlar anahtarsızdır ve yalnızca geri döngü bağlantısında çalışır. Devre dışı bırakma yönetilen satırları kaldırır; Undo kaydedilen baytları geri yükler. Eski `config.json` dosyasında OpenCodex satırları varsa veya `settings.local.json`, `customModels` değerini geçersiz kılıyorsa etkinleştirmeden önce çakışmayı giderin. [Factory BYOK belgelerine](https://docs.factory.ai/model-independence/byok) bakın.

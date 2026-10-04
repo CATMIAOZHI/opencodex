@@ -1,10 +1,10 @@
 ---
 title: Intégrations
-description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast et omo depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
+description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo et Factory Droid depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
 ---
 
 L'onglet **Intégrations** écrit le bloc fournisseur d'opencodex dans le fichier de configuration du client,
-puis peut le retirer. Quinze clients fonctionnent ainsi, chacun avec son propre commutateur :
+puis peut le retirer. Dix-sept clients fonctionnent ainsi, chacun avec son propre commutateur :
 
 | Client | Fichier de configuration | Format | Prise d'effet de la modification | Identifiant |
 |---|---|---|---|---|
@@ -23,6 +23,10 @@ puis peut le retirer. Quinze clients fonctionnent ainsi, chacun avec son propre 
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immédiatement à l'enregistrement — Raycast surveille le fichier | aucun — bouclage uniquement |
 | omo | `~/.omo/agent/models.json` | JSON | nouvelles sessions | espace réservé de bouclage |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | après arrêt et redémarrage | bouclage uniquement |
+| Kilo | premier fichier existant parmi `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` ou `config.json` sous `~/.config/kilo` (`XDG_CONFIG_HOME` déplace ce répertoire ; `kilo.jsonc` est créé si aucun n'existe) | JSONC | nouvelles sessions | `OPENCODEX_KILO_API_KEY` |
+| Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` sous Windows) | JSON | dès la détection du fichier | boucle locale sans clé |
+
+Les modèles GJC dotés d'une échelle d'effort de raisonnement prise en charge exportent `reasoning: true`, `thinking.levels` et `compat.supportsReasoningEffort`, afin que GJC propose le choix de l'effort. Les modèles Codex natifs reçoivent leur échelle standard même si le catalogue l'omet. Ces champs sont absents sans échelle connue ; `none` n'envoie pas d'effort et `ultra` devient `max` sur le réseau. Actualisez l'intégration pour mettre à jour ces options.
 
 La prise en charge gérée de DSH exige au minimum **DSH 0.1.0-rc.6**. OpenCodex ne possède que le fragment
 `llm-pi-ai.providers.opencodex` : **Appliquer** et **Actualiser** remplacent ce fragment, **Désactiver** ne
@@ -134,6 +138,8 @@ Kimi Code, gjc, MiniMax Code et Raycast — documents YAML, JSON5 et TOML rééc
 d'opencodex ont été modifiées, le commutateur se verrouille et la désactivation est refusée plutôt que de
 deviner quelles modifications vous appartiennent.
 
+Exception pour Hermes : l'ajout de `session_affinity_header: session-id` seul dans un bloc déjà géré peut être adopté via **Apply** ; toute autre modification d'un champ géré reste un conflit. Jusqu'à cette application, l'actualisation automatique de la liste des modèles est également suspendue. Le réglage concerne tous les modèles du provider et nécessite une version de Hermes qui le prend en charge ; il ne garantit aucun taux de succès du cache. Voir le [guide de mise à niveau en anglais](/guides/integrations/#hermes-session-affinity).
+
 ## Prévisualiser et confirmer les modifications
 
 Appliquer, Remplacer, Désactiver et Restaurer commencent désormais par un aperçu. La boîte de dialogue
@@ -192,7 +198,10 @@ une configuration cliente.
 
 **Pour `ocx opencode`, le bloc fournisseur du lanceur l'emporte.** Le lanceur injecte
 `provider.opencodex` par `OPENCODE_CONFIG_CONTENT`, qui est prioritaire sur la même entrée enregistrée sur
-le disque ; le reste de votre configuration opencode continue de s'appliquer normalement. Le commutateur
+le disque ; le reste de votre configuration opencode continue de s'appliquer normalement. Ces blocs sont
+construits à partir des mêmes métadonnées canoniques effectives que les exports : capacités, choix de
+raisonnement et limites connues sont repris tels quels, la limite de sortie recourant au besoin au
+repli de 32000 exigé par le schéma, borné au contexte. Le commutateur
 décrit ici est celui qui compte lorsque vous lancez directement `opencode`.
 
 ## Depuis le terminal
@@ -225,10 +234,12 @@ ocx mcode
 ```
 
 Une fois l’intégration connectée, `ocx sync` et `POST /api/sync` actualisent les catalogues MCode,
-Pi, Aside, Raycast et omo gérés. Le démarrage du proxy actualise aussi le catalogue Raycast géré.
-Les changements de visibilité, de fournisseur ou de préréglage actualisent Pi, Aside, Raycast et omo.
-Les blocs absents, modifiés par un tiers, non sûrs ou supprimés manuellement restent intacts ;
-réactivez explicitement l’intégration lorsque vous souhaitez la reconnecter.
+Pi, Aside, Raycast, omo, OpenCode et Kilo gérés. Le démarrage du proxy actualise aussi le
+catalogue Raycast géré. Les changements de visibilité, de fournisseur ou de préréglage actualisent
+Pi, Aside, Raycast, omo, OpenCode et Kilo. Les blocs absents, modifiés par un tiers, non sûrs ou
+supprimés manuellement restent intacts ; réactivez explicitement l’intégration lorsque vous
+souhaitez la reconnecter. Démarrez une nouvelle session Pi, OpenCode ou Kilo pour charger le
+fichier actualisé.
 
 Le CLI distinct de la plateforme MiniMax (`mmx`) n’est pas une intégration à commutateur de fichier. Ses
 commandes textuelles utilisent le point de terminaison compatible avec Anthropic de MiniMax ; OpenCodex
@@ -295,3 +306,17 @@ ocx integration client restore --op <operation-id>
 ```
 
 [CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).
+
+## Kilo
+
+Kilo n’écrit que `provider.opencodex` dans le premier fichier global existant sous `~/.config/kilo` (`XDG_CONFIG_HOME` déplace ce répertoire ; `kilo.jsonc` est créé si aucun candidat n’existe). Si un autre fichier candidat définit aussi `provider.opencodex`, l’état signale un conflit et Appliquer refuse. Les autres clés restent inchangées. Les choix de raisonnement par modèle sont écrits sous forme de carte de variantes dans le bloc fournisseur, à partir des mêmes métadonnées canoniques effectives que l’export OpenCode. `ocx sync` et `POST /api/sync` actualisent un bloc Kilo possédé par OpenCodex ; démarrez une nouvelle session Kilo pour charger le fichier actualisé. Appliquer réécrit tout le fichier ; commentaires et virgules finales ne sont pas conservés. Sélectionnez `opencodex/<modèle>` dans Kilo.
+
+Désactiver peut retirer le bloc appartenant à OpenCodex du fichier enregistré même si un autre candidat est en conflit ou ne peut pas être analysé ; cet autre fichier reste intact.
+
+```bash
+ocx integration client enable --client kilo
+```
+
+## Factory Droid
+
+Factory Droid utilise `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` sous Windows). Activez explicitement l’intégration avec `ocx integration client enable --client droid`, puis choisissez un modèle personnalisé dans `/model`. Les entrées gérées n’utilisent pas de clé et fonctionnent uniquement en boucle locale. La désactivation supprime ces entrées ; l’annulation restaure les octets sauvegardés. Si l’ancien `config.json` contient des entrées OpenCodex ou si `settings.local.json` remplace `customModels`, résolvez ce conflit avant l’activation. Consultez la [documentation Factory BYOK](https://docs.factory.ai/model-independence/byok).

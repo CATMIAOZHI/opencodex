@@ -11,6 +11,7 @@ import {
 } from "../../src/service-manager-probe";
 import { inspectNativeCodexOwnership } from "../../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/windows-elevation";
+import { windowsWscript } from "../../src/service/windows-scheduler";
 import { getDefaultConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -74,6 +75,7 @@ function schedulerXml(launcherPath: string): string {
     "<Task>",
     "  <Actions>",
     "    <Exec>",
+    `      <Command>${windowsWscript()}</Command>`,
     `      <Arguments>/b /nologo &quot;${escaped}&quot;</Arguments>`,
     "    </Exec>",
     "  </Actions>",
@@ -99,7 +101,7 @@ function writeSchedulerChain(
     'set "OCX_BUN=C:\\bun\\bun.exe"',
     'set "OCX_CLI=C:\\opencodex\\src\\cli\\index.ts"',
     ":loop",
-    '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+    '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
   ].join("\r\n"));
   writeFileSync(launcher, `shell.Run """${wrapper}""", 0, True\r\n`);
   if (options.writeTaskXml !== false) writeFileSync(taskXml, schedulerXml(launcher));
@@ -219,7 +221,7 @@ describe("Windows ownership probe hardening regressions", () => {
     expect(result.kind).toBe("unknown");
   });
 
-  test("one startup keeps two targeted queries but shares one unchanged full listing (#2923)", async () => {
+  test("a startup refreshes the full listing when a task appears after the second targeted snapshot", async () => {
     const codexHome = join(home, "codex");
     mkdirSync(codexHome, { recursive: true });
     process.env.CODEX_HOME = codexHome;
@@ -234,15 +236,22 @@ describe("Windows ownership probe hardening regressions", () => {
 
     let targetedQueries = 0;
     let fullListings = 0;
+    let taskRegistered = false;
     const runRaw: RawProbeRunner = (file, args) => {
       if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
       if (args.includes("/xml")) {
         targetedQueries += 1;
+        // Model a localized targeted query that took its absent snapshot before
+        // a concurrent installer committed the task, then returned unchanged
+        // opaque bytes. Only the following fresh listing can observe the task.
+        if (targetedQueries === 2) taskRegistered = true;
         return { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false };
       }
       if (args.includes("/fo")) {
         fullListings += 1;
-        return raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n');
+        return raw(0, taskRegistered
+          ? '"\\opencodex-proxy","N/A","Ready"\r\n'
+          : '"\\SomeOtherTask","N/A","Ready"\r\n');
       }
       return raw(1, "", "unexpected query");
     };
@@ -276,9 +285,9 @@ describe("Windows ownership probe hardening regressions", () => {
       },
     });
     try {
-      expect(ownerships.slice(0, 2)).toEqual(["owned", "owned"]);
+      expect(ownerships.slice(0, 2)).toEqual(["owned", "unknown"]);
       expect(targetedQueries).toBe(2);
-      expect(fullListings).toBe(1);
+      expect(fullListings).toBe(2);
     } finally {
       await server.stop(true);
     }
@@ -545,6 +554,9 @@ describe("Windows ownership probe hardening regressions", () => {
       winswStatus: () => "nonexistent",
       statePaths: [statePath],
       currentHomes: { codexHome: currentCodexHome, opencodexHome: configDir },
+      // Keep the foreign-vs-current comparison lexical: the fixture paths are
+      // intentionally not on disk, and a real ENOENT is "unknown", not "different".
+      realpathSync: (path: string) => path,
     });
 
     expect(result.ownership).toBe("unknown");
@@ -680,6 +692,7 @@ describe("Windows ownership probe hardening regressions", () => {
       winswStatus: () => "started",
       statePaths: [statePath],
       currentHomes: { codexHome, opencodexHome: configDir },
+      realpathSync: (path: string) => path,
     });
 
     expect(result.ownership).toBe("unknown");

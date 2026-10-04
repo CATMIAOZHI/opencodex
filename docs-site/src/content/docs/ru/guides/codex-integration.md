@@ -156,7 +156,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-В WSL, если `CODEX_HOME` не задан и Linux-файл `~/.codex/config.toml` отсутствует, opencodex
+В WSL, если `CODEX_HOME` не задан и Linux-каталог `~/.codex` отсутствует или не содержит состояния Codex
+(`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex
 дополнительно проверяет, нет ли единственного Windows-home Codex Desktop в
 `/mnt/c/Users/*/.codex/config.toml`. Если существует ровно один такой кандидат, используется его
 каталог, чтобы режим app-server в WSL и Windows Codex Desktop разделяли одни и те же config- и
@@ -376,6 +377,8 @@ v1/base/v2 при делегировании и fallback — в
 
 `ocx account refresh openai` и `ocx account list openai --quota --refresh` только читают квоты. Проверка модели расходует квоту и требует пользовательского сеанса панели: после восстановления откройте `ocx gui` и нажмите **Refresh quotas**. Для сервера без графического интерфейса откройте его панель в браузере; одного токена администратора недостаточно. Проверка приостановленного аккаунта не возобновляет и не выбирает его. Ошибки авторизации остаются видимыми до успешной проверки или повторного входа.
 
+В **Codex Set → Multi-auth** включите переключатель **Кредиты Codex** в заголовке **Codex Auth**, чтобы видеть последние полученные данные основного аккаунта и аккаунтов пула сразу под Week. По умолчанию показ выключен; настройка сохраняется как `showCodexCredits`. Баланс форматируется по локали; при наличии соответствующих данных отображается безлимитный режим или предупреждение о достижении лимита перерасхода. Общий лимит кредитов не предоставляется, поэтому полоса показывает доступность, а не процент. Переключатель управляет только отображением; новый вход ожидает данные своего аккаунта.
+
 Фоновая проверка — отдельная функция, выключенная по умолчанию. Она требует Token Guardian, политики `proactive` провайдера `openai` и `tokenGuardian.codexWarmupEnabled` и пропускает аккаунты, ожидающие проверки регистрации.
 
 ### Почему аккаунт перестал обслуживать запросы
@@ -407,7 +410,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-Когда opencodex работает как управляемая [фоновая служба](/reference/cli/#ocx-service), он
+Когда opencodex работает как управляемая [фоновая служба](/ru/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove), он
 устанавливает `OCX_SERVICE=1`, чтобы service-driven restart **не** дёргал конфигурацию Codex —
 только явный `ocx stop` / `ocx service stop` восстанавливает нативный Codex.
 

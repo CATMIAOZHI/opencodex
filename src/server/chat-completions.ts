@@ -9,8 +9,8 @@ import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import {
   assertChatCompletionsRoutingBody,
   ChatCompletionsRequestError,
-  chatCompletionsToResponsesBody,
 } from "../chat/inbound";
+import { chatToResponsesBody } from "../protocols/codecs/chat";
 import { normalizeChatImageParts } from "../chat/image-parts";
 import {
   chatCompletionsErrorResponse,
@@ -47,10 +47,13 @@ import {
   httpStatusForRequestLogTerminal,
   recordFirstOutput,
   type RequestLogContext,
-  type RequestLogEntry,
 } from "./request-log";
+import { createFinalRequestLog } from "./inference/final-log";
+import { clientWireLogOf, clientWireOf } from "./inference/client-wire";
+import { directEncodersApply } from "./inference/client-encoder-delivery";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
+import { previewXaiOauthWireModel } from "./responses/core-normalize";
 import { providerConsumesCallerAuthorization } from "../providers/caller-authorization";
 import { captureExplicitOpenAiCallerAuth } from "../providers/openai-sidecar";
 import { captureCallerDirectAuth } from "../providers/caller-authorization";
@@ -69,12 +72,21 @@ import {
   isTranslatorBudgetExceededError,
   type TranslatorBudget,
 } from "../lib/translator-budget";
-import { handleNativeChatCompletions, isNativeChatRouteEligible } from "./chat-native";
+import { createNativeChatComboSource, handleNativeChatCompletions, nativeChatDeclineReason } from "./chat-native";
+import { upstreamWireForAdapter, type ProtocolReasonCode } from "../protocols/contract";
+import { createProtocolEnvelope } from "../protocols/envelope";
+import { featuresFromChatBody } from "../protocols/features";
+import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
+import { requestPathForLane } from "../protocols/path";
+import { resolveProtocolSettings } from "../protocols/settings";
+import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
+import { recordProtocolShadowPlan } from "../protocols/shadow-plan";
 import { jsonCompletionSse } from "./chat-native-sse";
 import { parseRequestEffortRowId } from "./effort-row";
 import { parseSyntheticRowId } from "./fast-row";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../codex/loopback-target";
+import { applyDroidReasoningDefault, droidReasoningDefault, DROID_DEFAULT_EFFORT_HEADER } from "./droid-reasoning-default";
 
 type Rec = Record<string, unknown>;
 
@@ -146,6 +158,9 @@ async function handleChatCompletionsWithBudget(
 
   const requestedModel = chatBody.model as string;
   const { fastRow, effortRow } = parseSyntheticRowId(requestedModel, config);
+  const droidDefaultEffort = effortRow
+    ? undefined
+    : droidReasoningDefault(req.headers.get(DROID_DEFAULT_EFFORT_HEADER), chatBody);
   if (effortRow) chatBody.model = effortRow.baseId;
   if (fastRow) {
     chatBody.model = fastRow.baseId;
@@ -163,24 +178,33 @@ async function handleChatCompletionsWithBudget(
   let routeMayChangeCredentialDomain = false;
   let settledRoute: ReturnType<typeof routeModel> | null = null;
   let chatNativeRoute: ReturnType<typeof routeModel> | null = null;
+  // Why the native Chat lane was not taken; stays `unknown-model` when routing threw.
+  let nativeDecline: ProtocolReasonCode | undefined = "unknown-model";
   try {
     const route = routeModel(config, chatBody.model as string, evidenceFromBody(chatBody));
-    // The native Chat lane sends without re-entering the Responses path, so it
-    // has to apply the key's scope itself. Translated traffic is checked where
-    // every rewrite converges instead.
-    assertRouteAllowedByScope(resolveAdmissionModelScope(config, logIds?.admission), requestedModel, route);
     // Preserve the routed destination for Go recognition, then settle the wire before
     // deriving protocol-scoped affinity. Recognition must not inspect the flipped adapter.
     const routedProvider = route.provider;
     route.staticPolicy = captureRouteStaticPolicy(
       route.providerName, route.modelId, routedProvider, route.staticPolicy.effectiveAlias, "chat",
     );
+    // Native Chat must check its own destination; translated xAI OAuth turns
+    // preview the billed Fast lane before their final Responses scope check.
+    assertRouteAllowedByScope(resolveAdmissionModelScope(config, logIds?.admission), requestedModel, {
+      providerName: route.providerName,
+      modelId: previewXaiOauthWireModel({ options: {
+        serviceTier: typeof chatBody.service_tier === "string" ? chatBody.service_tier : undefined,
+      } }, route, config, "chat"),
+    });
     const wireProvider = resolveWireProtocolOverride(route.providerName, route.modelId, routedProvider, "chat", route.staticPolicy);
     route.provider = resolveOpenCodeGoTransport(
       wireProvider,
       getOrAllocateRequestSessionLane(req),
       routedProvider,
     );
+    if (!route.combo && route.routeKind !== "policy") {
+      applyDroidReasoningDefault(chatBody, droidDefaultEffort, { provider: route.provider, modelId: route.modelId });
+    }
     logCtx.model = route.modelId;
     logCtx.providerAdapter = route.provider.adapter;
     logCtx.requestedModel = requestedModel;
@@ -188,7 +212,8 @@ async function handleChatCompletionsWithBudget(
     logCtx.provider = route.providerName;
     logCtx.routeDecision = route.routeDecision;
     settledRoute = route;
-    routeMayChangeCredentialDomain = route.combo !== undefined || route.routeKind === "policy";
+    routeMayChangeCredentialDomain = route.combo !== undefined || route.routeKind === "policy"
+      || route.credentialDomainRewrite === true;
     callerAuthorizationRoute = !routeMayChangeCredentialDomain
       && providerConsumesCallerAuthorization(route.provider);
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
@@ -199,7 +224,23 @@ async function handleChatCompletionsWithBudget(
     }
     // Combos must enter the Responses routing path so child selection, forced default
     // effort, failover, and per-attempt telemetry run before any native Chat send.
-    if (!route.combo && !effortRow && isNativeChatRouteEligible(route, chatBody, config)) chatNativeRoute = route;
+    nativeDecline = route.combo ? "combo-or-policy-route"
+      : effortRow ? "effort-row"
+      : nativeChatDeclineReason(route, chatBody, config);
+    if (nativeDecline === undefined) {
+      chatNativeRoute = route;
+      // Reserve an input estimate for spend without recording it as usage: native Chat attempts
+      // keep the provider-reported counts, as they did before the reservation existed.
+      if (logCtx.usageLogInputTokens === undefined) {
+        const parts = [JSON.stringify(chatBody.messages ?? [])];
+        if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));
+        logCtx.spendInputEstimateTokens = Math.max(1, estimateTokens(parts.join("\n"), requestedModel));
+      }
+      const outputCeiling = chatBody.max_completion_tokens ?? chatBody.max_tokens;
+      if (typeof outputCeiling === "number" && outputCeiling > 0) {
+        logCtx.spendOutputCeilingTokens = Math.trunc(outputCeiling);
+      }
+    }
   } catch (err) {
     if (err instanceof AdmissionModelDeniedError) {
       logCtx.requestedModel = requestedModel;
@@ -219,6 +260,39 @@ async function handleChatCompletionsWithBudget(
     /* unknown model: let handleResponses shape the 404 */
   }
 
+  // Off by default: under the legacy policy with `nativeChatCombos` off nothing below is built
+  // and the request is unchanged. An effort row keeps its effort on the Responses body only, so
+  // its combo stays on the bridge.
+  const protocolSettings = resolveProtocolSettings(config);
+  const nativeChatCombos = protocolSettings.rollout.nativeChatCombos
+    && settledRoute?.combo !== undefined && !effortRow;
+  const envelope = protocolSettings.unrepresentable === "reject" || nativeChatCombos
+    ? createProtocolEnvelope({ inbound: "chat", body: chatBody, translatorBudget })
+    : undefined;
+  // Combo and policy children are judged per candidate (PF-07); an unknown model has no route.
+  if (envelope && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
+    const verdict = checkRepresentable({
+      inbound: "chat",
+      requestPath: chatNativeRoute
+        ? requestPathForLane("chat", "native", "chat")
+        : requestPathForLane("chat", "bridge", upstreamWireForAdapter(settledRoute.provider.adapter)),
+      features: envelope.features(),
+      policy: "reject",
+    });
+    if (!verdict.ok) {
+      markProtocolBlocked(logCtx, { inbound: "chat", reasonCodes: verdict.reasonCodes, features: verdict.features });
+      logCtx.errorCode = "unsupported_feature";
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(400, unrepresentableMessage(verdict.features), "invalid_request_error", "unsupported_feature");
+    }
+  }
+  markProtocolEntry(logCtx, {
+    inbound: "chat",
+    lane: chatNativeRoute ? "native" : "bridge",
+    reasonCodes: !chatNativeRoute && nativeDecline ? [nativeDecline] : [],
+    features: envelope ? () => envelope.features() : () => featuresFromChatBody(chatBody),
+  });
+  recordProtocolShadowPlan(logCtx, config, { inbound: "chat", model: requestedModel });
   if (chatNativeRoute) {
     return handleNativeChatCompletions({
       req,
@@ -237,7 +311,7 @@ async function handleChatCompletionsWithBudget(
   try {
     // Validate the full Chat boundary after routing. Native Chat keeps `chatBody` as
     // its wire source; this Responses projection is used only by the fallback path.
-    internalBody = chatCompletionsToResponsesBody(chatBody);
+    internalBody = chatToResponsesBody(chatBody);
     if (effortRow) {
       internalBody.reasoning = {
         ...(isRec(internalBody.reasoning) ? internalBody.reasoning : {}),
@@ -280,7 +354,8 @@ async function handleChatCompletionsWithBudget(
   } else if (internalBody.store === undefined) {
     internalBody.store = false;
   }
-  if (settledRoute && internalBody.reasoning !== undefined) {
+  if (settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy"
+    && internalBody.reasoning !== undefined) {
     const { stripEmptyLadderEffort, supportedLadderFor } = await import("./effort-policy");
     const ladder = supportedLadderFor({ provider: settledRoute.provider, modelId: settledRoute.modelId });
     const next = stripEmptyLadderEffort(internalBody.reasoning, ladder);
@@ -315,7 +390,9 @@ async function handleChatCompletionsWithBudget(
     // This enrichment is optional for routed/non-main providers. If native main
     // is fenced, omit it and let auth-context reject only a final physical-main
     // selection while healthy pool/provider routes continue.
-    if (tryClaimNativeMainProfileForTurn(logIds?.turnAdmissionLease)) {
+    const isCanonicalPool = settledRoute && isCanonicalOpenAiForwardProvider(settledRoute.provider)
+      && settledRoute.codexAccountMode === "pool";
+    if (!isCanonicalPool && tryClaimNativeMainProfileForTurn(logIds?.turnAdmissionLease)) {
       try {
         const { getMainAccountToken } = await import("../codex/main-account");
         const token = getMainAccountToken();
@@ -358,12 +435,7 @@ async function handleChatCompletionsWithBudget(
   });
   linkRequestSessionLane(req, internalReq);
 
-  let nativeLogged = false;
-  const finalizeNativeLog = (status: number, meta: { terminalStatus?: RequestLogEntry["terminalStatus"]; closeReason: "terminal" | "client_cancel" | "non_stream" }) => {
-    if (!logIds || nativeLogged) return;
-    nativeLogged = true;
-    addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
-  };
+  const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, config, logCtx, {
     openAiSidecarAuth,
     allowStoredOpenAiSidecarAuth: !!(callerAuthorizationRoute && settledRoute
@@ -377,6 +449,15 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    ...((settledRoute?.combo || settledRoute?.routeKind === "policy") && droidDefaultEffort
+      ? { droidDefaultEffort }
+      : {}),
+    // PF-07: the combo sends eligible candidates natively from this envelope.
+    ...(envelope && nativeChatCombos ? {
+      protocolSource: createNativeChatComboSource({
+        req, config, envelope, requestedModel, requestedStream: stream, translatorBudget,
+      }),
+    } : {}),
     // Terminal vision-describe marker (roadmap 180): the bridge rebuilds
     // headers from the FORWARD_HEADERS allowlist, which would drop the raw
     // header — so the fact is detected here and carried as an option flag.
@@ -385,7 +466,18 @@ async function handleChatCompletionsWithBudget(
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
+    ...(directEncodersApply(config, settledRoute)
+      ? { clientEncoder: { protocol: "chat" as const, stream, model: requestedModel } }
+      : {}),
   });
+  // Already in the Chat wire: no conversion. A direct-encoder body (PF-09) reports its own log
+  // facts to the deferred request log. A native combo child (PF-07) carries none: its row is
+  // written by the terminal callbacks above, and the deferred log's Responses-shaped inspector
+  // would misread a Chat stream, so of those only a refusal is wrapped.
+  if (clientWireOf(upstream) === "chat") {
+    if (!logIds || (upstream.ok && !clientWireLogOf(upstream))) return upstream;
+    return responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx);
+  }
 
   // Rewrite non-2xx before deferred logging so /api/logs records the client-facing status
   // (e.g. cyber_policy remapped from a passthrough 5xx to HTTP 400).

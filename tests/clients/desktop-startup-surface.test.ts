@@ -100,7 +100,9 @@ describe("desktop startup surface", () => {
 
   test("one deadline covers the whole sequence and bounds every probe under it", () => {
     expect(startup).toContain("pub const DEADLINE: Duration");
-    expect(startup).toContain("let deadline = started + DEADLINE;");
+    // `mut` because a takeover prompt moves the ceiling by however long the user thought — the
+    // budget bounds the machinery, not the person deciding.
+    expect(startup).toContain("let mut deadline = started + DEADLINE;");
     // The budget for finding an existing runtime is the CLI's now, not a second one here: the
     // tuned probe budgets exist because a shell-side reimplementation answered "nobody is
     // listening" twice and started duplicate proxies.
@@ -129,6 +131,14 @@ describe("desktop startup surface", () => {
     const spawn = startup.indexOf("sidecar::start(app, endpoint, watch)");
     expect(guard).toBeGreaterThan(-1);
     expect(spawn).toBeGreaterThan(guard);
+    // The guard reads the child the app tracks. The ownership confirmation cannot stand in for
+    // it: the run's `attach` resets that just before, which left the wait unreachable.
+    const decl = startup.slice(startup.indexOf("let owns_live_child = app"), guard);
+    expect(decl).toContain("waits_on_child(state.child_age())");
+    expect(decl).not.toContain("owns_runtime");
+    const attach = startup.indexOf("state.attach(proxy.clone());");
+    expect(attach).toBeGreaterThan(-1);
+    expect(attach).toBeLessThan(guard);
   });
 
   test("the diagnostic names the state, the endpoint, the home and how the child ended", () => {
@@ -155,6 +165,35 @@ describe("desktop startup surface", () => {
     const page = readFileSync(PAGE, "utf8");
     expect(page).toContain("progress.completed");
     expect(page).toContain("progress.failedPhase");
+  });
+
+  test("a hidden login launch keeps the lightweight surface until an explicit open", () => {
+    const finish = startup.slice(
+      startup.indexOf("fn finish("),
+      startup.indexOf("pub fn diagnostic("),
+    );
+    expect(finish).toContain("loads_dashboard_on_ready(LaunchOrigin::detect(), visible, requested)");
+    expect(finish).toContain("window.is_visible()");
+    expect(finish).toContain("startup.dashboard_requested()");
+    expect(finish).toContain("pub fn open_dashboard(");
+    expect(finish).toContain("startup.request_dashboard();");
+    expect(finish).toContain("startup.ready_dashboard()");
+    expect(finish).toContain("crate::window::show(&window)");
+    // The request is recorded before progress is read, so an open racing Ready is never lost.
+    const open = finish.slice(finish.indexOf("pub fn open_dashboard("));
+    expect(open.indexOf("startup.request_dashboard();")).toBeLessThan(open.indexOf("startup.ready_dashboard()"));
+    // The Rust behavioral tests own the navigation outcomes; this only pins that they exist.
+    for (const name of [
+      "fn explicit_dashboard_navigation_is_consumed_once_per_run()",
+      "fn a_refused_dashboard_navigation_is_retried_on_the_next_open()",
+      "fn an_open_during_startup_is_remembered_until_the_run_restarts()",
+    ]) expect(startup).toContain(name);
+
+    expect(lib).toContain("startup::open_dashboard(&app)");
+    expect(lib).toContain("startup::open_dashboard(app)");
+    const tray = code(repoPath(`${SRC}/tray.rs`));
+    expect(tray).toContain('"open-dashboard" =>');
+    expect(tray).toContain("crate::startup::open_dashboard(app)");
   });
 
   test("the snapshot answers with a state rather than with nothing", () => {
@@ -190,14 +229,28 @@ describe("desktop startup surface", () => {
   test("a run that reports nothing is still a run that ends", () => {
     // Every early return in the sequence, and every step that outlives the ceiling, used to leave
     // the surface on its last state for as long as the process lived.
-    const begin = startup.slice(startup.indexOf("pub fn begin("), startup.indexOf("fn settle("));
+    const begin = startup.slice(
+      startup.indexOf("pub fn begin("),
+      startup.indexOf("fn settle(app:"),
+    );
     expect(begin).toContain("run(&app, started).await;");
     expect(begin.slice(begin.indexOf("run(&app, started).await;"))).toContain("settle(");
-    expect(begin).toContain("sleep_until(started + DEADLINE + SETTLE_GRACE)");
+    // The consent wait moves the ceiling. The expiry check, the consent state and the terminal
+    // publish share one critical section, so a prompt posted or an answer consumed can never
+    // meet a failure already in flight.
+    expect(begin).toContain("startup.set_deadline(started + DEADLINE)");
+    expect(begin).toContain("startup.expire_run(");
+    expect(begin).toContain("Expiry::Blocked");
+    expect(begin).toContain("Expiry::Waiting");
+    expect(begin).toContain("Expiry::Fired");
+    expect(begin).toContain("sleep_until(wake)");
     // Idempotent, and bound to the run it was started for: it may not overwrite a real result,
     // and a guard left over from an earlier run may not fail the retry that replaced it.
-    const settle = startup.slice(startup.indexOf("fn settle("), startup.indexOf("async fn run("));
-    expect(settle).toContain("startup.settled()");
+    const settle = startup.slice(
+      startup.indexOf("fn settle(&self"),
+      startup.indexOf("async fn run("),
+    );
+    expect(settle).toContain("live.is_settled()");
     expect(settle).toContain("generation.load(Ordering::Acquire) != generation");
     expect(settle).toContain("Progress::new(Phase::Failed, elapsed_ms)");
   });
@@ -228,9 +281,10 @@ describe("desktop startup surface", () => {
   test("every call into the shell can fail without leaving the page blank", () => {
     const page = readFileSync(PAGE, "utf8");
     expect(page).toContain("function reportPageFailure");
-    // Both entry points — the first load and the retry — have to catch, because either one
-    // failing silently leaves a window that says "Starting…" forever.
-    expect(page.match(/reportPageFailure\(/g) || []).toHaveLength(3);
+    // Every entry point — the first load, the retry and the takeover decision — has to catch,
+    // because any one failing silently leaves a window that says "Starting…" forever. The count
+    // includes the function definition itself.
+    expect(page.match(/reportPageFailure\(/g) || []).toHaveLength(4);
     const retry = page.slice(page.indexOf('retry.addEventListener'));
     expect(retry.slice(0, 400)).toContain("catch");
   });

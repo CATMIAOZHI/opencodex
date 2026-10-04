@@ -14,7 +14,16 @@ description: 멀티 에이전트, 콤보, 관측성, 접근, 통합, 시스템, 
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off`는 대시보드의 **끔 (Off)** 행과 같은 스위치입니다. OpenCodex는 사이드카를
+실행하지 않고 Codex 통합은 `~/.codex/config.toml`에
+`web_search = "disabled"`를 쓰므로, MCP 검색 서버만 검색 경로로 쓸 수 있습니다.
+`--enabled on`은 그 줄을 다시 제거합니다. 저장이 실제로 스위치를 옮기면 명령은 트리거된
+Codex 쪽 쓰기(`--json`에서는 `codexWebSearch`, 그 밖에는 마지막
+`Codex config:` 줄)를 보고하고, 쓰기가 불가능했다면 `ocx sync`를 안내합니다.
+이 플래그는 `vision`에도 동작합니다.
 
 ### `ocx effort [status|set|clear]`
 
@@ -154,7 +163,7 @@ Grok Build model fence를 관리하고 적용합니다.
 
 ## 클라이언트 설정 내보내기
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|droid>`
 
 실행 중인 프록시에 연결할 client config를 출력합니다. 이 명령은 base URL, model list, 그리고 client에 따라 credential reference 또는 `opencodex-loopback` placeholder를 포함한 `opencodex` provider block을 선택한 client의 네이티브 형식으로 직렬화합니다.
 
@@ -162,7 +171,7 @@ Grok Build model fence를 관리하고 적용합니다.
 
 | 플래그 | 동작 |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | 필수입니다. 클라이언트 설정 형식을 선택합니다. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|droid>` | 필수입니다. 클라이언트 설정 형식을 선택합니다. |
 | `--json` | config JSON만 stdout에 출력하므로, redirect가 byte-exact 출력을 캡처합니다. `--out` write note를 포함한 모든 진단 메시지는 stderr로 갑니다. |
 | `--out <path>` | config를 `<path>`에 씁니다. 기존 파일이 있으면 덮어쓰지 않습니다. |
 | `--force` | `--out`이 기존 파일을 덮어쓰도록 허용합니다. |
@@ -192,6 +201,8 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `aside` | `~/.aside/u/<account>/models.json`. Aside의 `accounts.json`이 현재 계정으로 지정한 account를 사용합니다. 매니페스트를 읽을 수 없으면 임의의 계정으로 넘어가지 않고 거부합니다 | `aside-models.json` | 없음 — loopback placeholder |
 | `raycast` | `~/.config/raycast/ai/providers.yaml` (macOS와 Windows 모두 동일. Raycast는 `XDG_CONFIG_HOME`을 따르지 않습니다) | `raycast-providers.yaml` | 없음 — loopback 전용. `api_keys` 항목은 쓰지 않습니다 |
 | `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, `SENPI_CODING_AGENT_DIR`, `PI_CODING_AGENT_DIR` 순서로 설정된 값이 우선. 상대 경로는 거부됩니다) | `omo-models.json` | 없음 — loopback placeholder |
+| `kilo` | `~/.config/kilo`에서 먼저 존재하는 `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` 또는 `config.json` (`XDG_CONFIG_HOME`이 설정되면 해당 디렉터리 사용); 후보가 없으면 `kilo.jsonc` | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
+| `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | 루프백 전용, 환경 변수 불필요 |
 
 Raycast 내보내기는 `providers` 시퀀스에 `id: opencodex` 요소 하나만 담은 독립 `providers.yaml` 문서입니다. 내용은 `name: OpenCodex`, proxy의 `/v1` base URL, 그리고 `abilities`가 붙은 라우팅된 모든 모델입니다(`tools`와 `system_message`는 항상 지원, `vision`은 카탈로그의 입력 모달리티를 따름, `reasoning_effort`는 모델에 effort 사다리가 있을 때, `temperature`는 추론 모델에서 꺼짐). Custom Providers는 Raycast Pro 기능이며, Raycast가 이 파일을 감시하므로 저장한 변경은 재시작 없이 적용됩니다. 형식은 [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers)에 문서화되어 있습니다. `api_keys` 항목은 쓰지 않으므로 이 내보내기는 loopback 전용이며, loopback이 아닌 bind는 거부됩니다.
 
@@ -201,7 +212,7 @@ opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 
 `ocx export`는 실제 client config를 절대 쓰지 않습니다. 대상 경로는 손으로 병합하라고 출력되며, `--out`은 `--force` 없이 기존 파일을 덮어쓰지 않습니다. config를 바꾸어 덮어쓰면 이미 들어 있던 다른 provider, agent, MCP entry가 사라지기 때문입니다.
 :::
 
-어떤 key도 직렬화되지 않습니다. 생성되는 config에는 문서화된 env reference 또는 비밀이 아닌 loopback placeholder 중 하나가 들어갑니다. loopback proxy(`127.0.0.1`, 기본값)는 admission key가 전혀 필요하지 않습니다. 클라이언트의 설정 형식이 지원하고 proxy가 loopback 외부에 바인딩하는 경우에만 참조된 환경변수를 설정하십시오. admission key 발급 방법은 [Remote access](/reference/configuration/#remote-access)를 참조하십시오. upstream provider 자체의 key는 별도로 설정하며, [Providers](/guides/providers/)에서 안내합니다.
+어떤 key도 직렬화되지 않습니다. 생성되는 config에는 문서화된 env reference 또는 비밀이 아닌 loopback placeholder 중 하나가 들어갑니다. loopback proxy(`127.0.0.1`, 기본값)는 admission key가 전혀 필요하지 않습니다. 클라이언트의 설정 형식이 지원하고 proxy가 loopback 외부에 바인딩하는 경우에만 참조된 환경변수를 설정하십시오. admission key 발급 방법은 [Remote access](/ko/reference/configuration/server/#remote-access)를 참조하십시오. upstream provider 자체의 key는 별도로 설정하며, [Providers](/guides/providers/)에서 안내합니다.
 
 생성된 gjc 연동은 비밀이 아닌 로컬 접속용 값을 사용하므로 환경변수가 필요하지 않습니다. 루프백 전용이며 원격 접속 인증은 설정하지 않습니다.
 
@@ -252,3 +263,27 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 ### 연결된 클라이언트의 사용량
 
 `ocx usage`는 등록된 데이터 키로 허브에서 이 클라이언트의 사용량만 읽습니다. 출력에는 허브 출처와 키 범위가 표시됩니다. 기간·모델·공급자 필터와 `--since`/`--until`, `--json`을 그대로 사용할 수 있습니다. 계정별 내역과 다른 클라이언트 기록은 반환하지 않습니다. 허브가 응답하지 않거나 이 기능을 지원하지 않으면 오류를 알립니다. 로컬 기록으로 대신 표시하지 않습니다. 구형 허브라면 허브를 업데이트하세요.
+
+## Explain a listed request
+
+`ocx logs`의 일반 출력에 `id=<request-id>`가 표시됩니다. 이 값을 `ocx logs explain <request-id>`에 넣어 라우팅 결정을 확인할 수 있습니다. ID가 없거나 ID에 제어 문자가 있으면 조회 키를 바꾸어 표시하지 않고 이 항목을 생략합니다. JSON과 JSONL은 원래 ID와 형식을 유지합니다.
+
+## Routing profile lookup status
+
+`ocx route policy show <id>`는 프로필이 없으면 종료 코드 4를 반환합니다. 명령 인수가 빠졌거나 잘못되면 2를 반환하므로 스크립트에서 두 경우를 구별할 수 있습니다.
+
+## Upstream error details
+
+업스트림 오류 응답에 여러 메시지 필드가 있으면 기존 우선순위에서 처음 발견한 비어 있지 않은 문자열을 사용합니다. 빈 값이나 잘못된 형식의 필드 때문에 유효한 후순위 진단이 사라지지 않습니다.
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.

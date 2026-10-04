@@ -139,7 +139,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-在 WSL 中，如果未設定 `CODEX_HOME`，且 Linux 的 `~/.codex/config.toml` 不存在，opencodex 也會檢查
+在 WSL 中，如果未設定 `CODEX_HOME`，且 Linux 的 `~/.codex` 目錄不存在或不含任何 Codex 狀態（`config.toml`, `auth.json`, `sessions`, `history.jsonl`），opencodex 也會檢查
 `/mnt/c/Users/*/.codex/config.toml` 下是否只有一個 Windows Codex Desktop home。候選項恰好只有一個時，
 會使用該目錄，讓 WSL app-server mode 與 Windows Codex Desktop 共用相同的 config 與 auth 檔案。
 若要覆蓋此偵測，請明確設定 `CODEX_HOME`。
@@ -315,7 +315,7 @@ ocx service install    # 常駐：登入時自動啟動，崩潰後自動重新�
 ## Subagent 選擇器
 
 目錄同步會讓選定的 sub-agent 模型可供 Codex 使用；picker 排序請參見
-[Codex App 模型選擇器](/zh-tw/guides/codex-app-models/#subagent-selection)，v1/base/v2 委派與 fallback
+[Codex App 模型選擇器](/zh-tw/guides/codex-app-models/#子代理選擇)，v1/base/v2 委派與 fallback
 行為則參見 [Sub-agent Surface](/zh-tw/guides/sub-agent-surface/)。
 
 ## Codex 帳號預熱
@@ -325,6 +325,8 @@ ocx service install    # 常駐：登入時自動啟動，崩潰後自動重新�
 若新 OAuth 憑證的已驗證用量查詢確認5小時、每週或每月額度耗盡，則不呼叫模型而直接儲存帳號，顯示**等待驗證**。重新啟動或更新權杖也不會使其可用。額度恢復後重新整理額度：只有完整的最新用量顯示有餘額，才會傳送小型驗證請求；請求完成後帳號才可用於路由。查詢或驗證失敗將保留等待狀態。一般狀態輪詢不會傳送該請求。首次註冊時用量未知仍需一般預熱驗證。
 
 `ocx account refresh openai` 和 `ocx account list openai --quota --refresh` 僅查詢用量。模型驗證會消耗配額，因此需要使用者的儀表板工作階段：配額恢復後，開啟 `ocx gui` 並點選 **Refresh quotas**。無介面主機也需要透過瀏覽器存取其儀表板；僅憑管理員權杖無法授權驗證。暫停的帳號可以完成驗證，但不會因此恢復或被選取。模型授權錯誤會持續顯示，直到驗證或重新登入成功。
+
+在 **Codex Set → Multi-auth** 中，開啟 **Codex Auth** 標題列中的 **Codex 額度** 開關，即可在 Week 下方顯示主帳號和各池帳號最近查詢到的點數。預設關閉，並儲存為 `showCodexCredits`。餘額按地區格式顯示；上游回報時會顯示無限額或超額使用上限警告。由於沒有點數總上限，長條表示可用狀態而非百分比。此開關僅控制顯示，新登入需等待其自身的查詢結果。
 
 背景重新驗證是獨立功能，預設關閉。它需要 Token Guardian、`openai` 的 `proactive` 更新政策及 `tokenGuardian.codexWarmupEnabled`，並略過等待註冊驗證的帳號。
 
@@ -357,7 +359,7 @@ ocx restore    # 不停止 proxy，只恢復原生設定（alias: ocx eject）
 ocx restore back # 讓普通 Codex 再次指向仍在執行的 proxy
 ```
 
-當 opencodex 作為受管的 [背景服務](/zh-tw/reference/cli/#ocx-service) 執行時，會設定 `OCX_SERVICE=1`，
+當 opencodex 作為受管的 [背景服務](/zh-tw/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove) 執行時，會設定 `OCX_SERVICE=1`，
 因此 service 驅動的 restart **不會**反覆改寫 Codex 設定；只有明確執行 `ocx stop` 或
 `ocx service stop` 才會恢復原生 Codex。
 

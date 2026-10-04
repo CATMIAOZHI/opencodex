@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleResponses } from "../../src/server/responses/core";
-import { handleResponsesWithPolicyFallback, rankPolicyFallbackCandidates } from "../../src/server/responses/policy-fallback";
+import { handleResponsesWithPolicyFallback } from "../../src/server/responses/policy-fallback";
 import { tryAdmitTurn } from "../../src/server/lifecycle";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
+import { historyIndexPath } from "../../src/routing/history/schema";
+import { clearHealthHistoryCacheForTests } from "../../src/routing/health";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -39,6 +42,9 @@ beforeEach(() => {
   releaseSpendHome = acquireOwnedSpendHome();
 });
 afterEach(() => {
+  // Policy candidate health opens a separate SQLite index under this home.
+  closeRequestHistoryIndex();
+  clearHealthHistoryCacheForTests();
   // Released before the directory is removed, so no live database sits inside it.
   releaseSpendHome?.();
   releaseSpendHome = undefined;
@@ -121,14 +127,12 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
   });
 
   test("native failure leaves policy-hop request headers free of synthesized identity", async () => {
+    clearHealthHistoryCacheForTests();
     const cfg = config();
-    const trace = { version: 1, decisionId: "native-hop", createdAt: Date.now(), requestedModel: "openai/gpt-5.6-luna",
-      routeKind: "policy", profile: { id: "native-hop", revision: "1" }, requirements: [],
-      candidates: [
-        { provider: "openai", model: "gpt-5.6-luna", eligible: true, exclusions: [], score: { total: 2 } },
-        { provider: "other", model: "m", eligible: true, exclusions: [], score: { total: 1 } },
-      ], selected: { candidateIndex: 0, provider: "openai", model: "gpt-5.6-luna", reason: "fixture" },
-    } as unknown as Parameters<typeof rankPolicyFallbackCandidates>[0];
+    // Both physical routes belong to the original evaluation; a diagnostic trace cannot add one.
+    cfg.routingProfiles = { "native-hop": { candidates: [
+      { provider: "openai", model: "gpt-5.6-luna" }, { provider: "other", model: "m" },
+    ] } };
     const requests: Request[] = [];
     const wires: Headers[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -138,16 +142,15 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
     }) as typeof fetch;
     const req = new Request("http://localhost/v1/responses", { method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}`, "chatgpt-account-id": "fixture-native-main" },
-      body: JSON.stringify({ model: "openai/gpt-5.6-luna", input: "ping", stream: false }) });
+      body: JSON.stringify({ model: "policy/native-hop", input: "ping", stream: false }) });
     const runCore: NonNullable<Parameters<typeof handleResponsesWithPolicyFallback>[4]>["runCore"] = async (request, current, log, options) => {
       requests.push(request);
-      const response = await handleResponses(request, current, log, options);
-      if (requests.length === 1) log.routeDecision = trace;
-      return response;
+      return handleResponses(request, current, log, options);
     };
     const response = await handleResponsesWithPolicyFallback(req, cfg, { model: "", provider: "" },
       { claudeNativeSessionId: expectedSession }, { runCore });
     await response.text();
+    expect(existsSync(historyIndexPath(home))).toBe(true);
     expect(response.status).toBe(200);
     expect(requests).toHaveLength(2);
     expect(wires[0]?.get("session_id")).toBe(expectedSession);

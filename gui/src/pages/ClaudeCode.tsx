@@ -1,6 +1,8 @@
+import ClaudeInterceptStart from "../components/ClaudeInterceptStart";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useClaudeConnection } from "./use-claude-connection";
 import { Notice, Switch } from "../ui";
-import { useI18n, useT, LOCALES } from "../i18n/shared";
+import { useI18n, useT, LOCALES, type TKey } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
 import { readSessionListCacheEntry, writeSessionListCacheEntry } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
@@ -17,10 +19,36 @@ import {
 import { serializeSidecarOverride } from "./claude-code-sidecar";
 import { AUTO_COMPACT_WINDOW_DEFAULT, formatCompactWindow, newClientId, type ClaudeCodeState, type MapRow } from "./claude-code-types";
 import { SmallFastModelSetting } from "./claude-code-settings";
+import { interceptReasonKey, normalizeSharedProxy, selectFirstPartyNotice, type FirstPartyNotice } from "./claude-code-first-party";
 
 export { AutoConnectSetting, SmallFastModelSetting } from "./claude-code-settings";
 
 type CachedClaudeCode = { state: ClaudeCodeState; rows: MapRow[] };
+
+function normalizeFirstPartyState(state: ClaudeCodeState): ClaudeCodeState {
+  return {
+    ...state,
+    cliFirstParty: state.cliFirstParty === true,
+    cliFirstPartyApplied: state.cliFirstPartyApplied === true,
+    desktopFirstParty: state.desktopFirstParty === true,
+    interceptRunning: state.interceptRunning === true,
+    interceptEligible: state.interceptEligible === undefined ? true : state.interceptEligible === true,
+    sharedProxy: normalizeSharedProxy(state.sharedProxy),
+  };
+}
+
+const firstPartyNoticeKeys: Record<Exclude<FirstPartyNotice, null>, TKey> = {
+  unknown: "claude.firstParty.unknown",
+  foreign: "claude.firstParty.foreign",
+  local: "claude.firstParty.local",
+  residual: "claude.firstParty.residual",
+  disabled: "claude.firstParty.disabled",
+  routingOff: "claude.firstParty.routingOff",
+  stopped: "claude.firstParty.deadProxy",
+  broken: "claude.firstParty.brokenProxy",
+  notApplied: "claude.firstParty.notApplied",
+  shared: "claude.firstParty.shared",
+};
 
 export default function ClaudeCode({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
   const t = useT();
@@ -29,7 +57,13 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
   const cacheKey = `ocx.claude-code.v1:${apiBase}`;
   const resourceKey = `claude-code:${apiBase}`;
   const cachedEntry = useMemo(() => readSessionListCacheEntry<CachedClaudeCode>(cacheKey), [cacheKey]);
-  const cached = cachedEntry?.data ?? null;
+  const cached = useMemo(() => {
+    if (!cachedEntry?.data) return null;
+    return {
+      ...cachedEntry.data,
+      state: normalizeFirstPartyState(cachedEntry.data.state),
+    };
+  }, [cachedEntry]);
   const [draftState, setState] = useState<ClaudeCodeState | null>(() => cached?.state ?? null);
   const [draftRows, setRows] = useState<MapRow[]>(() => cached?.rows ?? []);
   const [hasDraftRows, setHasDraftRows] = useState(Boolean(cached));
@@ -46,8 +80,9 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
    * control's meaning would be worse than moving it. The in-flight ref
    * serializes rapid clicks so three taps cannot become three PUTs.
    */
-  const [connectionPending, setConnectionPending] = useState(false);
-  const connectionInFlight = useRef(false);
+  const { pending: connectionPending, change: changeConnection } = useClaudeConnection(apiBase);
+  const [firstPartyPending, setFirstPartyPending] = useState(false);
+  const firstPartyInFlight = useRef(false);
 
   const fetchCode = useCallback(async (signal: AbortSignal): Promise<CachedClaudeCode> => {
     const res = await fetch(`${apiBase}/api/claude-code`, { signal });
@@ -56,7 +91,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       t("claude.loadFail"),
     );
     if (!r) throw new Error(t("claude.loadFail"));
-    const nextState: ClaudeCodeState = {
+    const nextState = normalizeFirstPartyState({
       ...r,
       // No coercion: an absent config key is AUTO, and coercing it to subscription is
       // what silently converted an untouched auto config on every save.
@@ -68,7 +103,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
       autoCompactWindow: r.autoCompactWindow ?? null,
       injectAgents: r.injectAgents !== false,
       effectiveModelEnv: r.effectiveModelEnv ?? {},
-    };
+    });
     const nextRows = Object.entries(r.modelMap ?? {}).map(([from, to]) => ({ id: newClientId(), from, to: String(to) }));
     const next = { state: nextState, rows: nextRows };
     if (signal.aborted) throw new Error("Claude Code request aborted");
@@ -129,26 +164,53 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
    * that showed "on" after a failed PUT would be lying about their config.
    */
   const toggleConnection = async () => {
-    if (!state || connectionInFlight.current) return;
-    connectionInFlight.current = true;
-    setConnectionPending(true);
+    if (!state) return;
     setStatus("");
-    const next = !state.enabled;
+    await changeConnection(!state.enabled, enabled => {
+      setState({ ...state, enabled });
+      codeResource.refresh();
+    }, error => {
+      setOk(false);
+      setStatus(error instanceof Error && error.message ? error.message : t("claude.networkError"));
+    });
+  };
+
+  const toggleFirstParty = async () => {
+    if (!state || firstPartyInFlight.current) return;
+    firstPartyInFlight.current = true;
+    setFirstPartyPending(true);
+    setStatus("");
     try {
       const response = await fetch(`${apiBase}/api/claude-code`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: next }),
+        body: JSON.stringify({ cliFirstParty: !state.cliFirstParty }),
       });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { code?: string; port?: number; bound?: number; configured?: number } | null;
+        const refusalKeys = {
+          intercept_disabled: "claude.firstParty.refusal.interceptDisabled",
+          intercept_unavailable: "claude.firstParty.refusal.interceptUnavailable",
+          foreign_env: "claude.firstParty.refusal.foreignEnv",
+          ca_unavailable: "claude.firstParty.refusal.caUnavailable",
+          unreadable: "claude.firstParty.refusal.unreadable",
+          write_failed: "claude.firstParty.refusal.writeFailed",
+        } as const;
+        const key = payload?.code && payload.code in refusalKeys
+          ? refusalKeys[payload.code as keyof typeof refusalKeys]
+          : "claude.saveFailed";
+        throw new Error(payload?.code && ["disabled", "client_role", "ephemeral_port", "port_in_use", "port_mismatch", "stopped", "failed"].includes(payload.code)
+          ? t(interceptReasonKey(payload.code), { port: payload.port ?? "", bound: payload.bound ?? "", configured: payload.configured ?? "" }) : t(key));
+      }
       await readJsonOrThrow(response, t("claude.saveFailed"));
-      setState({ ...state, enabled: next });
+      await fetchCode(new AbortController().signal);
       codeResource.refresh();
     } catch (error) {
       setOk(false);
       setStatus(error instanceof Error && error.message ? error.message : t("claude.networkError"));
     } finally {
-      connectionInFlight.current = false;
-      setConnectionPending(false);
+      firstPartyInFlight.current = false;
+      setFirstPartyPending(false);
     }
   };
 
@@ -257,12 +319,14 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
 
   return (
     <div className="claudecode-workspace-shell">
-      {/* Page title/subtitle live on Claude.tsx above the Code/Desktop strip. */}
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {loadState.showError && <Notice tone="err">{t("claude.loadFail")}</Notice>}
-      {state && (
-        <div className="claudecode-connection-head">
-          <span id="claudecode-connection-label">{t("claude.enabledLabel")}</span>
+      <div className="card claudecode-connection-card">
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="title" id="claudecode-connection-label">{t("claude.enabledLabel")}</span>
+            <span className="desc">{t("claude.subtitle")}</span>
+          </div>
           <Switch
             on={state.enabled}
             onClick={() => void toggleConnection()}
@@ -270,7 +334,28 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
             label={t("claude.toggleAria")}
           />
         </div>
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="title" id="claudecode-first-party-label">{t("claude.firstParty.label")}</span>
+            <span className="desc">{t("claude.firstParty.desc")}</span>
+          </div>
+          <Switch
+            on={state.cliFirstParty}
+            onClick={() => void toggleFirstParty()}
+            disabled={firstPartyPending}
+            label={t("claude.firstParty.aria")}
+          />
+        </div>
+      </div>
+      {!state.interceptRunning && <ClaudeInterceptStart apiBase={apiBase} reason={state.interceptReason} port={state.interceptFailurePort} onStarted={() => codeResource.refresh()} />}
+      {state.cliFirstParty && (
+        <Notice tone="warn">{t("claude.firstParty.risk")}</Notice>
       )}
+      {(() => {
+        const notice = selectFirstPartyNotice(state);
+        const key = notice && firstPartyNoticeKeys[notice];
+        return key ? <Notice tone="warn">{t(key)}</Notice> : null;
+      })()}
       <div className="claudecode-workspace-root">
         <aside className="claudecode-workspace-rail" aria-label={t("claude.pageTitle")}>
           <div className="claudecode-workspace-rail-list">

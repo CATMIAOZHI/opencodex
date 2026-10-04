@@ -15,7 +15,17 @@ les modes de surface, la délégation, l'effort et le comportement de repli s'em
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off` est le même interrupteur que la ligne **Désactivé (Off)** du tableau de bord :
+OpenCodex cesse d'exécuter le service auxiliaire et l'intégration Codex écrit
+`web_search = "disabled"` dans `~/.codex/config.toml`, ce qui permet à un serveur de
+recherche MCP d'être le seul chemin de recherche. `--enabled on` supprime à nouveau cette ligne.
+Lorsque l'enregistrement déplace réellement l'interrupteur, la commande signale l'écriture côté Codex
+qu'elle a déclenchée (`codexWebSearch` avec `--json`, une ligne `Codex config:`
+sinon) et renvoie vers `ocx sync` quand elle n'a pas pu avoir lieu. L'option fonctionne aussi
+pour `vision`.
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
 
@@ -166,7 +176,7 @@ Gérez et appliquez la clôture du modèle Grok Build.
 
 ## Exportation de la configuration client
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|droid>`
 
 Imprimez une configuration client connectée au proxy en cours d'exécution. La commande sérialise le
 bloc fournisseur `opencodex` — URL de base, liste de modèles et référence d’identifiant du client
@@ -177,7 +187,7 @@ les modèles Codex peuvent actuellement voir.
 
 | Option | Actions |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | Requis. Sélectionne le dialecte de configuration client. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|droid>` | Requis. Sélectionne le dialecte de configuration client. |
 | `--json` | Imprimez le document généré en tant que JSON sur la sortie standard pour les scripts. Il s'agit de JSON même lorsque le format natif du client sélectionné est YAML, TOML ou JSON5. |
 | `--out <path>` | Écrivez le format de configuration natif du client dans `<path>`. Refuse de remplacer un fichier existant. |
 | `--force` | Autoriser `--out` à remplacer un fichier existant. |
@@ -210,6 +220,8 @@ propres valeurs par défaut à ces lignes.
 | `aside` | `~/.aside/u/<account>/models.json` pour le compte que le fichier `accounts.json` d'Aside désigne comme courant ; un manifeste illisible est refusé plutôt que de retomber sur un compte | `aside-models.json` | aucun — espace réservé de bouclage |
 | `raycast` | `~/.config/raycast/ai/providers.yaml`, sur macOS comme sur Windows (Raycast n'honore pas `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | aucun — bouclage uniquement, aucune entrée `api_keys` n'est écrite |
 | `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, puis `SENPI_CODING_AGENT_DIR`, puis `PI_CODING_AGENT_DIR` l'emportent dans cet ordre une fois définis ; une valeur relative est refusée) | `omo-models.json` | aucun — espace réservé de bouclage |
+| `kilo` | premier fichier existant parmi `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` ou `config.json` sous `~/.config/kilo` (`XDG_CONFIG_HOME` déplace ce répertoire) ; utilise `kilo.jsonc` si aucun n'existe | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
+| `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | boucle locale uniquement ; aucune variable d’environnement |
 
 L'exportation Raycast est un document `providers.yaml` autonome contenant un seul élément `id: opencodex`
 dans la séquence `providers` : `name: OpenCodex`, l'URL de base `/v1` du proxy et chaque modèle routé avec
@@ -289,3 +301,15 @@ L’identité ou le condensat décrit les fichiers au moment de l’observation,
 
 Inspectez et modifiez en toute sécurité la configuration OpenCodex validée. `show` et `get` masquent les secrets. Importer
 valide avant d'écrire et nécessite `--yes`.
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.

@@ -422,6 +422,43 @@ export function cancelResponseBodyBestEffort(res: Response): void {
   }
 }
 
+/**
+ * Whether an answer to a spent operator replacement would invite yet another send.
+ *
+ * Once the one replacement a request may spend has gone out, the first send may already have run
+ * the turn, so nothing this exchange returns may cause a third send. Two parties would send again:
+ * the client, whose retry table covers 408, 409, 429 and every 5xx (the Codex client retries 5xx
+ * whatever the headers say; see {@link REPLAY_REFUSED_STATUS}), and this proxy, whose credential
+ * and quota recovery resends on 401 (token refresh, key and pool rotation) and on 402/429
+ * (account rotation). A client that follows a 307 or 308 sends the same POST body again, and a 413
+ * is answered as a context overflow the client compacts and resends, so those belong here too.
+ * {@link isTransientUpstreamStatus} is only the gateway subset of that set: 429 and 529 escaped
+ * it. These statuses settle as the refusal instead.
+ */
+function invitesResendAfterReplacement(status: number): boolean {
+  return status === 401 || status === 402 || status === 408 || status === 409 || status === 429
+    || status === 307 || status === 308 || status === 413 || status >= 500;
+}
+
+/**
+ * The answer a request keeps once its one operator replacement has gone out.
+ *
+ * A status that invites another send settles as the refusal. Any other answer keeps its real
+ * status: no client retries it, and the caller needs the evidence (a 400 names the request
+ * defect). The marker still stops this process from using it as a recovery trigger, such as the
+ * opaque-blob rebuild of a 400 or a combo hop on a context overflow, because each of those checks
+ * it before sending again.
+ */
+export function settleOperatorReplacement(response: Response): Response {
+  if (response.ok) return response;
+  if (invitesResendAfterReplacement(response.status)) {
+    cancelResponseBodyBestEffort(response);
+    return replayRefusalResponse();
+  }
+  markResponseNonReplayable(response);
+  return response;
+}
+
 export async function fetchWithAttemptDeadline(
   url: string,
   init: RequestInit,
@@ -569,7 +606,7 @@ export function replayRefusalResponse(): Response {
   const response = new Response(JSON.stringify({ error: {
     type: "upstream_error",
     code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
-    message: "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
+    message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
   } }), {
     status: REPLAY_REFUSED_STATUS,
     headers: { "content-type": "application/json", ...REPLAY_REFUSAL_CLIENT_HEADERS },
@@ -594,9 +631,9 @@ export async function fetchWithResetRetry(
   if (attempts === 0) throw new SendBudgetExhaustedError(opts.label);
   let lastError: unknown;
   let sawReset = false;
-  // True once this leg has spent the request's operator allowance. From that point the leg can
-  // only settle as the refusal: a second send of a possibly-executed turn is already out, and
-  // handing the client anything it would retry compounds it.
+  // True once this leg has spent the request's operator allowance. From that point the leg
+  // settles as the refusal or an unambiguous answer: a second send of a possibly-executed turn
+  // is already out, and handing the client anything it would retry compounds it.
   let spentOperatorReplacement = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
@@ -605,7 +642,8 @@ export async function fetchWithResetRetry(
     // rethrow, abort), so a per-send report is the only shape that is correct on all of them.
     opts.onSendsConsumed?.(1);
     try {
-      return await doFetch(attempt === 0 ? firstRecovery : "connection-reset");
+      const response = await doFetch(attempt === 0 ? firstRecovery : "connection-reset");
+      return spentOperatorReplacement ? settleOperatorReplacement(response) : response;
     } catch (err) {
       if (opts.abortSignal?.aborted) throw err;
       if (!isConnectionResetError(err)) {
@@ -809,6 +847,62 @@ export async function refetchAfterProtocolSafeReset(
     console.warn("[upstream-retry] protocol-safe refetch rejected" + label + "; preserving original stream error");
     return null;
   }
-  console.warn("[upstream-retry] pre-output Responses reset" + label + "; using one replacement stream");
+  console.warn("[upstream-retry] pre-output stream reset" + label + "; using one replacement stream");
   return replacement;
+}
+
+/**
+ * Wrap a streamed body so a reset that arrives before the downstream reader has consumed a single
+ * byte swaps in ONE replacement body.
+ *
+ * The zero-byte gate is the whole reason this wrapper exists: the caller observed nothing, which is
+ * the stage where a replacement may even be considered. Every other question -- whether the operator
+ * granted one, whether the request is replayable, whether the replacement is a fresh unlocked body
+ * that matches the contract already promised to the client -- belongs to
+ * {@link refetchAfterProtocolSafeReset}. Delegating rather than re-deciding is what keeps the chat
+ * lane from drifting away from the one the Responses stream already uses.
+ *
+ * Partial output is never masked: once a byte has reached the caller, the original failure stands.
+ */
+export function wrapWithZeroOutputRefetch(
+  body: ReadableStream<Uint8Array>,
+  doFetch: ProtocolSafeRefetch,
+  // `authorize` is optional on the shared options but required here: a zero-output replacement
+  // is always a post-header resend, so every caller must name the gate that weighs it.
+  opts: ProtocolSafeRefetchOptions & { authorize: () => boolean },
+): ReadableStream<Uint8Array> {
+  let reader = body.getReader();
+  let bytesRead = 0;
+  let retried = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      for (;;) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            return;
+          }
+          bytesRead += value.byteLength;
+          controller.enqueue(value);
+          return;
+        } catch (err) {
+          if (!retried && bytesRead === 0 && !opts.abortSignal?.aborted) {
+            retried = true;
+            const replacement = await refetchAfterProtocolSafeReset(doFetch, err, { ...opts, authorize: opts.authorize });
+            if (replacement?.body) {
+              try { void reader.cancel().catch(() => {}); } catch { /* broken reader; the replacement won */ }
+              reader = replacement.body.getReader();
+              continue;
+            }
+          }
+          try { controller.error(err); } catch { /* already torn down */ }
+          return;
+        }
+      }
+    },
+    cancel(reason) {
+      try { void reader.cancel(reason).catch(() => {}); } catch { /* already torn down */ }
+    },
+  });
 }

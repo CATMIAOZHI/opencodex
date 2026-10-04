@@ -1,13 +1,13 @@
 ---
 title: CLI Agents, Routing, and Integrations
-description: Multi-agent, combo, observability, access, integration, system, and config commands.
+description: Multi-agent, combo, observability, access, protocol path, integration, system, and config commands.
 ---
 
 These commands control agent policy and routing, inspect the live proxy, and connect supported clients to opencodex.
 
 ## Agent policy
 
-### `ocx agent <status|injection|effort|subagents|fallback|sidecar> ...`
+### `ocx agent <status|injection|effort|subagents|fallback|roles|sidecar> ...`
 
 Manage the headless multi-agent roster, effort caps, prompt injection, fallback, and sidecar settings.
 Use `status` for the current policy. See [Sub-agent surfaces](/guides/sub-agent-surface/) for how
@@ -16,6 +16,31 @@ surface modes, delegation, effort, and fallback behavior fit together.
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ```
+
+`ocx agent roles` is for omo (Codex / LazyCodex). It lists each Codex agent role in
+`$CODEX_HOME/agents` with its model pin and whether `~/.omo/omo.jsonc` can be updated, or says
+LazyCodex is not installed, in which case `set` is refused. `ocx agent roles set <role> <model>` rewrites only
+that role's root `model` line and mirrors the value into omo.jsonc at
+`codex.agents.<role>.model`. A missing omo.jsonc, or one containing comments, is left unchanged
+and the command says so. See [omo (Codex / LazyCodex) role models](/guides/integrations/#omo-codex--lazycodex-role-models).
+
+```bash
+ocx agent roles set explorer xai/grok-4.5
+```
+
+`ocx agent roles suggest` is omo (Codex / LazyCodex) only, refused like `set` when LazyCodex is not
+installed. It sizes every role with one call to the default Codex model (or `--model`) and
+prints a proposed model and effort per role without writing anything. `--apply` writes every proposal
+through the same write as `set`, skipping and naming the roles whose model and effort already match.
+See [Auto-assign](/guides/integrations/#auto-assign).
+
+Human-readable suggestion output displays terminal control characters as visible escapes.
+Use `--json` when you need the original suggestion values without presentation escaping.
+
+`ocx agent injection suggest <work>` does the same for the delegation model: it sizes the described
+work, proposes the cheapest sufficient model and an effort from the delegation picker's list, and writes
+nothing unless `--apply` is given, which saves through the same write as `injection set`. See
+[Delegation model and effort](/guides/sub-agent-surface/#delegation-model-and-effort).
 
 `ocx agent sidecar web --list` and `ocx agent sidecar vision --list` print the models the
 server currently offers for each sidecar — the exact filtered set the dashboard picker shows
@@ -31,7 +56,17 @@ stay writable).
 ```bash
 ocx agent sidecar web --list
 ocx agent sidecar web --model gpt-5.6-luna
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off` is the same switch as the Dashboard's Off row: OpenCodex stops running the
+sidecar and the Codex integration writes `web_search = "disabled"` into `~/.codex/config.toml`,
+which is what lets an MCP search server be the only search path. `--enabled on` removes that
+marker-owned line again. When the save actually moves the switch, the command reports the
+Codex-side write it triggered (`codexWebSearch` in `--json`, a trailing `Codex config:` line
+otherwise) and points at `ocx sync` when it could not happen; a save that leaves the switch
+where it was has nothing to report and prints no `Codex config:` line. The flag works for
+`vision` too.
 
 ### `ocx effort [status|set|clear]`
 
@@ -120,6 +155,18 @@ unqualified bare OpenAI model id. Bare `gpt-5.6-*` native aliases use Codex Pool
 Account-qualified OpenAI routes remain distinct, while provider-qualified routes such as
 `openai-apikey/gpt-5.6-*` use their configured API key and never fall through to the native alias.
 Read the safety and visibility contract in the guide before enabling the compatibility pair.
+With `--strategy jev` only, the decision method is chosen by one of two mutually exclusive flags.
+`--decision-provider <provider|->` names a configured `jev-decision` row (for example a self-hosted
+Ollama `tev1`) as a System One-compatible server. `--decision-model <route|->` names an ordinary
+opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as JSON; it cannot be
+this combo or any JEV combo. Omitting both uses TypeSafe. `--decision-timeout <ms|->` sets the
+decision deadline (1000–120000, default 4000); `-` clears any of the three.
+
+`ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
+[--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an
+unsaved selection and reports the gate, backend, and latency; it may spend one decision call.
+`ocx combo discover [--query <text>]` lists configured System One rows and catalog models that look
+like decision models, with the derived endpoint.
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 
@@ -193,6 +240,39 @@ Manage OpenCodex admission API keys and inspect external endpoints and models. `
 ocx access key create deployment
 ```
 
+### `ocx api <protocols|explain|policy> ...`
+
+Inspect and set how requests travel between the client APIs and provider wires. See
+[Protocol paths](/guides/protocol-paths/) for the vocabulary.
+
+| Command | Route | Changes state |
+| --- | --- | --- |
+| `ocx api protocols [--provider <name>] [--json]` | `GET /api/protocols` | No |
+| `ocx api explain --model <id> --inbound <responses\|chat\|messages> [--feature <key>]... [--json]` | `POST /api/protocols/plan` | No |
+| `ocx api policy [--json]` | `GET /api/protocols` | No |
+| `ocx api policy [--messages <on\|off>] [--unrepresentable <legacy\|reject>] [--rollout <switch>=<on\|off>]... [--json]` | `PATCH /api/protocols/settings` | Yes |
+
+- `protocols` prints the contract version, whether each client API is served and why, the
+  unrepresentable policy, every rollout switch, and the policy revision. `--provider` adds the
+  upstream wire that provider receives, who decided it, and the models on another wire.
+- `explain` previews the path a model would take from one client API. `--feature` is repeatable
+  and accepts a comma-separated list; `ocx api protocols --json` lists the known feature keys. The
+  preview is computed from configuration: nothing is sent upstream, no combo rotation advances, and
+  the input is not logged.
+- `policy` without a setting flag only reads. With one it sends a single change to the running
+  proxy, which validates it, saves the configuration, and answers with the new policy.
+  `--messages off` also turns the Claude integration off, as the dashboard toggle does. Switch
+  names and combinations are validated by the proxy; for example
+  `--rollout managedMessagesNativeOAuth=on` is refused unless `managedMessagesNative` is
+  already on or turned on in the same command.
+
+```bash
+ocx api explain --model combo/main --inbound chat --feature request.seed,request.tools
+ocx api policy --rollout shadowPlan=on
+```
+
+Usage errors exit 2 before any request is sent. `--json` prints the management API body as is.
+
 ## Client integrations
 
 ### `ocx integration <claude|grok> ...`
@@ -228,8 +308,8 @@ remain supported. Use `ocx claude config <status|set> ...` for Claude Code setti
 
 Ensure the proxy is running, then launch opencode with the generated `provider.opencodex` and
 `providers.opencodex` blocks in OpenCode's inline runtime layer (`OPENCODE_CONFIG_CONTENT`). The
-legacy block keeps V1 clients working; the V2 block is the one carrying the selectable
-reasoning-effort variants. Existing inline config is preserved and only those two keys are replaced
+legacy block keeps V1 clients working with variant maps; the V2 block carries native arrays
+for the same reasoning-effort choices and defaults. Existing inline config is preserved and only those two keys are replaced
 for this launch. Global or project `opencode.json` files may be read to warn about an existing
 override, but on-disk files are never modified. Routed models appear as
 `opencodex/<provider>/<model>`. Launching plain `opencode` later behaves exactly as before.
@@ -240,7 +320,7 @@ Manage and apply the Grok Build model fence.
 
 ## Client config export
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|droid>`
 
 Print a client config wired to the running proxy. The command serializes the
 `opencodex` provider block — base URL, model list, and the client's credential
@@ -249,9 +329,14 @@ reference or loopback placeholder — in the selected client's native format.
 The proxy must be running; the command resolves its live port, reads `/api/models`, and emits only
 models Codex can currently see.
 
+OpenCode and Kilo exports preserve effective model limits, known capabilities, declared reasoning
+choices and defaults, including metadata inherited by custom rows. Explicit overrides still win;
+unknown capabilities and defaults are not invented. The OpenCode launcher uses the same metadata.
+See [client integrations](/guides/integrations/) for managed refresh and upgrade behavior.
+
 | Flag | Action |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | Required. Selects the client config dialect. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo\|droid>` | Required. Selects the client config dialect. |
 | `--json` | Print the generated document as JSON on stdout for scripts. This is JSON even when the selected client's native format is YAML, TOML, or JSON5. |
 | `--out <path>` | Write the client's native config format to `<path>`. Refuses to replace an existing file. |
 | `--force` | Allow `--out` to replace an existing file. |
@@ -283,6 +368,8 @@ client applies its own defaults for those).
 | `aside` | `~/.aside/u/<account>/models.json` for the account Aside's own `accounts.json` names as current; an unreadable manifest is refused rather than defaulting to an account | `aside-models.json` | none — loopback placeholder |
 | `raycast` | `~/.config/raycast/ai/providers.yaml` on macOS and Windows alike (Raycast does not honor `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | none — loopback only, no `api_keys` entry is written |
 | `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, then `SENPI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR` win in that order when set; a relative value is refused) | `omo-models.json` | none — loopback placeholder |
+| `kilo` | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` (`XDG_CONFIG_HOME` relocates that directory); uses `kilo.jsonc` when none exists | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
+| `droid` | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | `factory-settings.json` | loopback only; no environment variable |
 
 The managed DSH export requires DSH 0.1.0-rc.6 or newer and owns only
 `llm-pi-ai.providers.opencodex`. DSH hot reloads that provider; the user's default model and
@@ -331,7 +418,7 @@ No key is ever serialized. Configs carry either a documented environment referen
 non-secret loopback placeholder. A loopback proxy (`127.0.0.1`, the default) requires no
 admission key at all. Set a referenced variable only when the client schema supports it and
 the proxy binds beyond loopback; see
-[Remote access](/reference/configuration/#remote-access) for how admission keys are issued. Keys for
+[Remote access](/reference/configuration/server/#remote-access) for how admission keys are issued. Keys for
 the upstream providers themselves are a separate thing entirely, configured per
 [Providers](/guides/providers/).
 The generated gjc integration uses a non-secret loopback placeholder and needs no environment variable. It remains loopback-only; it does not configure remote admission credentials.
@@ -397,8 +484,36 @@ An observed identity or digest describes those files during this observation. It
 Inspect and safely modify validated OpenCodex configuration. `show` and `get` mask secrets. Import
 validates before writing and requires `--yes`.
 
+Display and mutation output strip credentials from proxy URLs while retaining the host and port.
+`direct` and credential-free proxy values stay readable. `export` preserves credentials so the
+backup can restore the configuration; store exported files as secrets.
+
 ### Usage from a connected client
 
 `ocx usage` reads the connected hub with this client's enrolled data key. Human output identifies the hub source and client-key scope; `--json` returns the same scoped data. Range, surface, provider/model filters and custom `--since`/`--until` bounds remain available. Account breakdowns and other clients' records are not shared. An old or unavailable hub produces an explicit error instead of substituting local usage; upgrade the hub if it does not support this read.
 
 The read-only data-plane endpoint is `GET /v1/usage`, using `x-opencodex-api-key` with a configured client key. Environment-wide and admin keys are refused. It accepts `range`, `surface`, `provider`, `model`, `since`, and `until`; unknown/repeated options and caller-selected key IDs are rejected. Oversized skipped rows retain the explicit incomplete-history warning.
+
+## Explain a listed request
+
+Human `ocx logs` output includes `id=<request-id>`. Pass that value to `ocx logs explain <request-id>` to inspect routing decisions. Rows without an ID or with control characters in their ID omit the field instead of displaying a different lookup key. JSON and JSONL output retain their existing schema.
+
+## Routing profile lookup status
+
+`ocx route policy show <id>` exits 4 when the profile does not exist. Missing or invalid command arguments exit 2. Scripts can distinguish a missing profile from incorrect usage.
+
+## Upstream error details
+
+When an upstream error envelope contains several message fields, OpenCodex uses the first nonblank string in its established priority order. Empty or malformed fields no longer hide a valid fallback diagnostic.
+
+### Forced Claude Code subagent model
+
+The Subagents page offers **Force all subagents onto one model**, off by default. Select an exposed roster-style id, such as `combo/tev-auto`, then enable the switch. The roster is offered first; unavailable saved roster entries cannot be force targets.
+
+`ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
+
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` only for an authoritative million-token window; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+
+Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
+
+The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.

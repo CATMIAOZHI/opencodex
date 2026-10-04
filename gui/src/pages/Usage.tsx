@@ -1,7 +1,7 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
-import type { UsageReadMetadata } from "../usage-summary-resource";
+import { readUsageResponseJson, UsageReadFailedError, type UsageReadMetadata } from "../usage-summary-resource";
 import { UsageIncompleteNotice } from "../components/usage-incomplete-notice";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
@@ -16,12 +16,15 @@ import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 import UsageDailyCosts from "./UsageDailyCosts";
 import { parseUsageTimeRange, type UsageRangeError, type UsageTimeWindow } from "../usage-time-range";
-import UsageCompanionPanel from "./usage-companion-panel";
+import UsageCompanionView from "./usage-companion-view";
+import { readUsageTab, selectUsageTab, usageTabKeyDown } from "./usage-tab-keydown";
 
 type Range = "all" | "30d" | "7d";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
 
 interface UsageSummaryTotals {
+  throughputTokensPerSec?: number;
+  throughputSamples?: number;
   requests: number;
   measuredRequests: number;
   reportedRequests: number;
@@ -71,6 +74,8 @@ interface UsageModel {
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
+  throughputTokensPerSec?: number;
+  throughputSamples?: number;
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
@@ -93,6 +98,8 @@ interface UsageProvider {
   reportedRequests: number;
   estimatedRequests: number;
   totalTokens: number;
+  throughputTokensPerSec?: number;
+  throughputSamples?: number;
   /** API list-price estimate for the priced portion of this row. */
   estimatedCostUsd?: number;
   /** Requests included in the API list-price estimate. */
@@ -205,6 +212,16 @@ function cacheHitRateTitle(model: UsageModel, locale: Locale, t: TFn): string | 
     measured: formatTokens(observed, locale),
     total: formatTokens(model.inputTokens, locale),
   });
+}
+
+function hasThroughput(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function throughputTitle(row: { throughputTokensPerSec?: number; throughputSamples?: number }, t: TFn): string {
+  return hasThroughput(row.throughputTokensPerSec)
+    ? t("usage.throughput.title", { samples: row.throughputSamples ?? 0 })
+    : t("usage.throughput.unmeasured");
 }
 
 // Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
@@ -486,6 +503,11 @@ function UsageSummaryCards({
       <div className="stat"><div className="muted">{t("usage.card.coverage")}</div><div className="stat-value">{formatPct(summary.coverageRatio)}</div></div>
       <div className="stat"><div className="muted">{t("usage.card.activeDays")}</div><div className="stat-value">{activeDays}</div></div>
     </div>
+      <div className="usage-cost-row" role="note" title={throughputTitle(summary, t)}>
+        <span className="muted">{t("usage.col.tokPerSec")}</span>
+        <span className="stat-value mono usage-cost-value">{hasThroughput(summary.throughputTokensPerSec) ? summary.throughputTokensPerSec.toFixed(1) : t("usage.unavailable")}</span>
+        <span className="muted text-caption">{throughputTitle(summary, t)}</span>
+      </div>
       {summary.estimatedCostUsd !== undefined && (
         <div className="usage-cost-row" role="note">
           <span className="muted">{t("usage.cost.total")}</span>
@@ -771,6 +793,7 @@ function UsageModelsTable({
             <th className="num">{t("usage.col.measured")}</th>
             <th className="num">{t("usage.col.inputTokens")}</th>
             <th className="num">{t("usage.col.outputTokens")}</th>
+            <th className="num">{t("usage.col.tokPerSec")}</th>
             <th className="num">{t("usage.col.cacheHits")}</th>
             <th className="num">{t("usage.col.cacheWrites")}</th>
             <th className="num">{t("usage.col.cacheHitRate")}</th>
@@ -780,6 +803,7 @@ function UsageModelsTable({
           {models.map(model => {
             const providerName = formatProviderDisplayName(model.provider, t);
             const cacheCoverage = cacheHitRateTitle(model, locale, t);
+            const throughputNote = throughputTitle(model, t);
             return (
               <tr key={`${model.provider}/${model.model}`}>
                 {/* Both pinned columns are width-capped, so carry the full value in a tooltip. */}
@@ -792,6 +816,12 @@ function UsageModelsTable({
                 <td className="num">{model.measuredRequests}</td>
                 <td className="num mono">{formatTokens(model.inputTokens, locale)}</td>
                 <td className="num mono">{formatTokens(model.outputTokens, locale)}</td>
+                <td className="num mono" title={throughputNote}>
+                  <span className="usage-hit-rate">
+                    {hasThroughput(model.throughputTokensPerSec) ? `${model.throughputTokensPerSec.toFixed(1)} tok/s` : unavailable}
+                  </span>
+                  {hasThroughput(model.throughputTokensPerSec) && <span className="sr-only">{throughputNote}</span>}
+                </td>
                 <td className="num mono">{formatOptionalTokens(model.cacheReadInputTokens ?? model.cachedInputTokens, locale, unavailable)}</td>
                 <td className="num mono">{formatOptionalTokens(model.cacheCreationInputTokens, locale, unavailable)}</td>
                 {/*
@@ -846,6 +876,7 @@ function UsageProvidersTable({
   t: TFn;
   workspace?: boolean;
 }) {
+  const unavailable = t("usage.unavailable");
   const sectionLabel = t("usage.section.providers");
   const titleId = "usage-providers-title";
   const listPriceDisclaimerId = "usage-providers-list-price-disclaimer";
@@ -858,6 +889,7 @@ function UsageProvidersTable({
             <th className="num">{t("usage.col.requests")}</th>
             <th className="num">{t("usage.col.measured")}</th>
             <th className="num">{t("usage.col.tokens")}</th>
+            <th className="num">{t("usage.col.tokPerSec")}</th>
             <th className="num" aria-describedby={listPriceDisclaimerId}>{t("usage.col.apiListPrice")}</th>
             <th>{t("usage.col.share")}</th>
           </tr>
@@ -869,6 +901,12 @@ function UsageProvidersTable({
               <td className="num">{provider.requests}</td>
               <td className="num">{provider.measuredRequests}</td>
               <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>
+              <td className="num mono" title={throughputTitle(provider, t)}>
+                <span className="usage-hit-rate">
+                  {hasThroughput(provider.throughputTokensPerSec) ? `${provider.throughputTokensPerSec.toFixed(1)} tok/s` : unavailable}
+                </span>
+                {hasThroughput(provider.throughputTokensPerSec) && <span className="sr-only">{throughputTitle(provider, t)}</span>}
+              </td>
               <td className="num"><UsageListPrice row={provider} locale={locale} t={t} /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
             </tr>
@@ -936,8 +974,7 @@ function UsageCoveragePanel({
 }
 
 /**
- * Workspace layout for Usage: left rail picks one report section so Overview /
- * Models / Providers / Coverage do not stack into a long scroll.
+ * Workspace layout for Usage: report sections remain mounted in one scrollable column.
  */
 function UsageWorkspaceBody({
   loadCostDays,
@@ -953,7 +990,6 @@ function UsageWorkspaceBody({
   range,
   locale,
   t,
-  apiBase,
 }: {
   data: UsageResponse | null;
   heatmap: ReturnType<typeof buildHeatmap>;
@@ -968,10 +1004,8 @@ function UsageWorkspaceBody({
   range: Range | null;
   locale: Locale;
   t: TFn;
-  apiBase: string;
 }) {
   const empty = !!data && data.summary.requests === 0;
-  const [companionMetric, setCompanionMetric] = useState<string | null>(null);
   const sections = [
     {
       id: "overview",
@@ -1011,20 +1045,6 @@ function UsageWorkspaceBody({
       label: t("usage.section.coverage"),
       meta: data ? formatPct(data.summary.coverageRatio) : "—",
       body: data ? <UsageCoveragePanel summary={data.summary} t={t} workspace /> : null,
-    },
-    {
-      id: "companion",
-      label: t("usage.section.companion"),
-      meta: companionMetric
-        ? t(`usage.companion.menu${companionMetric[0]!.toUpperCase()}${companionMetric.slice(1)}` as never)
-        : "—",
-      body: (
-        <UsageCompanionPanel
-          apiBase={apiBase}
-          providers={data?.providers ?? []}
-          onSettingsLoaded={setCompanionMetric}
-        />
-      ),
     },
   ];
   return (
@@ -1074,6 +1094,12 @@ function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, co
 
 export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBase: string; connected?: boolean; apiKeyId?: string }) {
   const { t, locale } = useI18n();
+  const [tab, setTab] = useState(readUsageTab);
+  useEffect(() => {
+    const onHash = () => setTab(readUsageTab());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const [range, setRange] = useState<Range>("30d");
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [scope, setScope] = useState<UsageScope>("machine");
@@ -1103,8 +1129,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
       query.set("until", String(until));
     }
     const response = await fetch(`${apiBase}/api/usage?${query}`, { signal });
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
-    const next = await response.json() as UsageResponse;
+    const next = await readUsageResponseJson<UsageResponse>(response);
     // HTTP 200 alone does not prove an older daemon honored the custom bounds.
     if (since !== undefined && (next?.customWindow !== true || next.since !== since || next.until !== until)) {
       throw new UsageWindowMismatchError();
@@ -1165,8 +1190,24 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
     <>
       <div className="page-head usage-head">
         <h2 id="usage-page-title">{t("usage.title")}</h2>
-        <UsageFilters surface={surface} range={customWindow ? null : range} onSurface={setSurface} onRange={selectRange} t={t} />
+        {tab === "report" && <UsageFilters surface={surface} range={customWindow ? null : range} onSurface={setSurface} onRange={selectRange} t={t} />}
       </div>
+      <div className="page-tabs" role="tablist" aria-label={t("nav.usage")}>
+        {(["report", "companion"] as const).map(item => (
+          <button key={item} type="button" role="tab" id={`usage-tab-${item}`}
+            aria-selected={tab === item} aria-controls={`usage-panel-${item}`}
+            tabIndex={tab === item ? 0 : -1}
+            className={`page-tab${tab === item ? " page-tab--active" : ""}`}
+            onClick={() => selectUsageTab(item)} onKeyDown={usageTabKeyDown}>
+            {t(item === "report" ? "usage.workspace.report" : "usage.section.companion")}
+          </button>
+        ))}
+      </div>
+      {tab === "companion" ? (
+        <div role="tabpanel" id="usage-panel-companion" aria-labelledby="usage-tab-companion">
+          <UsageCompanionView apiBase={apiBase} providers={data?.providers ?? []} />
+        </div>
+      ) : <div role="tabpanel" id="usage-panel-report" aria-labelledby="usage-tab-report">
       <p className="page-sub">{t("usage.subtitle")}</p>
       {/*
         An explicit interval is the rare path — the presets answer the question almost every
@@ -1270,6 +1311,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
         <Notice tone="err">
           {state.error instanceof UsageWindowMismatchError
             ? `${t("usage.loadError")} ${t("dash.codexRestartMalformed")}`
+            : state.error instanceof UsageReadFailedError ? t("usage.loadError")
             : connected ? t("usage.hubOffline") : state.error instanceof Error ? `${t("usage.loadError")} ${state.error.message}` : t("usage.loadError")}{" "}
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => resource.refresh()}>
             {t("common.retry")}
@@ -1277,7 +1319,11 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
         </Notice>
       ) : (
         <>
-          {state.showError && <Notice tone="err">{t(connected ? "usage.hubOffline" : "usage.loadError")}</Notice>}
+          {state.showError && (
+            <Notice tone="err">
+              {t(connected && !(state.error instanceof UsageReadFailedError) ? "usage.hubOffline" : "usage.loadError")}
+            </Notice>
+          )}
           <UsageIncompleteNotice data={data} />
           {data?.historyTruncated && (
             // Naming the loaded window is the point: without it, `30d` and "Available history"
@@ -1311,10 +1357,10 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             range={customWindow ? null : range}
             locale={locale}
             t={t}
-            apiBase={apiBase}
           />
         </>
       )}
+      </div>}
     </>
   );
 }

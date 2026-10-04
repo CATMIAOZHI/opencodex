@@ -18,6 +18,7 @@ import {
   changedSelectionFailure,
   captureTestOutput,
   createIsolatedTestEnvironment,
+  LIVE_INSTALL_CREDENTIAL_ENV,
   ensureGuiDependencies,
   inspectChangedRun,
   resolveBunTestArgs,
@@ -327,6 +328,23 @@ describe("test runner isolation", () => {
     expect(existsSync(isolated.root)).toBe(false);
   });
 
+  test("drops the developer's live install credentials and keeps the rest of the environment", () => {
+    const isolated = createIsolatedTestEnvironment({
+      PATH: "/test/bin",
+      FIXTURE: "unchanged",
+      OPENCODEX_API_AUTH_TOKEN: "live-data-token",
+      OPENCODEX_ADMIN_AUTH_TOKEN: "live-admin-token",
+      OCX_API_TOKEN_FILE: "/real/home/.opencodex/service-api-token",
+    });
+    try {
+      for (const name of LIVE_INSTALL_CREDENTIAL_ENV) expect(name in isolated.env).toBe(false);
+      expect(isolated.env.FIXTURE).toBe("unchanged");
+      expect(isolated.env.PATH).toBe("/test/bin");
+    } finally {
+      isolated.cleanup();
+    }
+  });
+
   test.if(process.platform === "win32")("gives the Windows sandbox a real profile shape", () => {
     const isolated = createIsolatedTestEnvironment({ PATH: "C:\\test\\bin" });
     try {
@@ -555,6 +573,14 @@ describe("bun test argv", () => {
     for (const value of ["", "-1", "59999", "3600001", "Infinity", "1e6", "900000.5"]) {
       expect(() => resolveBunTestPlan([], undefined, { OCX_TEST_MAIN_TIMEOUT_MS: value })).toThrow("OCX_TEST_MAIN_TIMEOUT_MS");
     }
+  });
+
+  test("server admission fixtures finish in a dedicated process", () => {
+    const plan = resolveBunTestPlan([]);
+    expect(plan[0]?.args).toContain("**/active-registry-admission.test.ts");
+    expect(plan.find(lane => lane.label === "active-registry-admission.test.ts")?.args).toEqual([
+      "--isolate", "--parallel=1", "./tests/codex-integration/active-registry-admission.test.ts",
+    ]);
   });
 
   test("serial lanes override caller parallelism without changing the main lane", () => {

@@ -196,7 +196,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-WSL에서는 `CODEX_HOME`이 비어 있고 Linux `~/.codex/config.toml`도 없을 때 `/mnt/c/Users/*/.codex/config.toml` 아래의 단일 Windows Codex Desktop home도 확인합니다. 후보가 정확히 하나면 그 디렉터리를 사용하므로 WSL app-server mode와 Windows Codex Desktop이 같은 config와 auth 파일을 공유합니다. 이 탐지를 덮으려면 `CODEX_HOME`을 명시하세요.
+WSL에서는 `CODEX_HOME`이 비어 있고 Linux `~/.codex` 디렉터리가 없거나 Codex 상태(`config.toml`, `auth.json`, `sessions`, `history.jsonl`)가 전혀 없을 때 `/mnt/c/Users/*/.codex/config.toml` 아래의 단일 Windows Codex Desktop home도 확인합니다. 후보가 정확히 하나면 그 디렉터리를 사용하므로 WSL app-server mode와 Windows Codex Desktop이 같은 config와 auth 파일을 공유합니다. 이 탐지를 덮으려면 `CODEX_HOME`을 명시하세요.
 
 Windows에서 Orca shell은 `CODEX_HOME`과 `ORCA_CODEX_HOME`을 Orca의 번들 런타임 home으로 설정할 수 있지만, ChatGPT/Codex app은 여전히 `%USERPROFILE%\\.codex`를 읽습니다. `ocx status`와 `ocx doctor`는 이 정확한 불일치를 경고하고, 경로는 가린 채 대상 home을 출력합니다. 해당 Orca shell에서 background service를 설치했다면 먼저 원래 shell에서 uninstall하고, `CODEX_HOME`을 app home으로 설정한 뒤 `ORCA_CODEX_HOME`을 해제하고, sync/restore를 다시 실행한 다음 service를 다시 설치하세요.
 
@@ -256,6 +256,8 @@ Codex는 디스크의 카탈로그(`$CODEX_HOME/opencodex-catalog.json`이 기�
 `exec` 진입점과 Browser 및 Computer Use를 포함한 중첩 MCP 도구를 노출할 수 있으며, opencodex는 모델의 일반
 function call만 라우팅합니다. 도구 실행, 권한, 확인은 Codex에 그대로 남고 opencodex가 별도의 browser 또는
 desktop-control executor를 구현하지는 않습니다.
+
+라우팅된 Responses 턴에서 도구 선언 검증이 명시적으로 켜져 있으면, 선언된 도구 목록을 사용할 수 없을 때도 클라이언트 도구 호출을 거부합니다. 명시적으로 빈 목록은 모든 클라이언트 도구 호출을 거부합니다. Chat과 Anthropic 클라이언트의 도구 검증 책임은 그대로 유지됩니다.
 
 Codex의 `exec` custom-tool grammar를 허용하지 않는 key-auth Responses provider의 경우, opencodex는 해당 선언과
 history를 업스트림 function tool로 인코딩한 다음 스트리밍된 function-call lifecycle을 Codex에 전달하기 전에
@@ -356,6 +358,8 @@ ChatGPT 계정을 추가하거나 재인증할 때 OpenCodex는 일반적으로 
 
 `ocx account refresh openai`와 `ocx account list openai --quota --refresh`는 사용량만 조회합니다. 모델 검증은 할당량을 사용하므로 사람의 대시보드 세션이 필요합니다. 할당량이 복구되면 `ocx gui`를 열고 **Refresh quotas**를 클릭하세요. 헤드리스 호스트도 브라우저에서 해당 대시보드에 접속해야 하며, 관리자 토큰만으로는 검증할 수 없습니다. 일시 정지된 계정도 검증할 수 있지만 일시 정지를 해제하거나 계정을 선택하지는 않습니다. 모델 인증 실패 표시는 검증 또는 재인증에 성공할 때까지 유지됩니다.
 
+**Codex Set → Multi-auth**에서 **Codex Auth** 제목 줄의 **Codex 크레딧** 스위치를 켜면 메인 계정과 풀 계정의 최근 크레딧 잔액이 Week 바로 아래에 표시됩니다. 기본값은 꺼짐이며 `showCodexCredits`로 저장됩니다. 잔액은 로케일에 맞는 숫자로 표시하고, 응답에 따라 무제한 또는 초과 사용 한도 도달 안내를 표시합니다. 전체 크레딧 한도가 제공되지 않으므로 막대는 백분율이 아닌 사용 가능 상태를 나타냅니다. 스위치는 표시만 제어하며 새 로그인에는 해당 계정의 조회 결과가 필요합니다.
+
 별도의 백그라운드 재검증은 기본적으로 꺼져 있습니다. Token Guardian, `openai`의 `proactive` 갱신 정책, `tokenGuardian.codexWarmupEnabled`가 필요하며 등록 검증 대기 계정은 제외합니다.
 
 ### 계정이 요청을 처리하지 못하게 된 이유
@@ -387,7 +391,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-opencodex가 managed [background service](/reference/cli/#ocx-service)로 실행될 때는 `OCX_SERVICE=1`을 설정하므로 service-driven restart가 Codex config를 흔들지 **않습니다**. 네이티브 Codex를 복원하는 것은 명시적인 `ocx stop` / `ocx service stop`뿐입니다.
+opencodex가 managed [background service](/ko/reference/cli/lifecycle/#백그라운드-서비스)로 실행될 때는 `OCX_SERVICE=1`을 설정하므로 service-driven restart가 Codex config를 흔들지 **않습니다**. 네이티브 Codex를 복원하는 것은 명시적인 `ocx stop` / `ocx service stop`뿐입니다.
 
 ## 페이지 분할 기록 보호에 따른 거부
 
@@ -400,3 +404,7 @@ opencodex가 managed [background service](/reference/cli/#ocx-service)로 실행
 ## 메인 계정 재인증 취소
 
 메인 계정의 기기 코드 재인증을 취소할 때 DELETE 요청의 일시적 실패, 네트워크 오류, 알 수 없거나 아직 종료되지 않은 상태의 응답이 발생하면 진행 중인 흐름과 취소 실패 표시를 유지하여 취소를 다시 시도할 수 있게 합니다. 일반적으로는 상태 조회도 계속하므로 로그인이 완료되면 이를 확인할 수 있습니다. 흐름이 `pending` 또는 `committing`일 때 재시도 가능한 취소 실패와 GET 상태 조회의 2xx 이외 HTTP 응답이 겹치면, 응답 도착 순서와 관계없이 서버가 마지막으로 제공한 기기 코드·확인 URL·진행 단계를 유지하거나 복원하여 같은 흐름의 취소를 다시 시도할 수 있게 합니다. GET의 HTTP 실패는 상태 조회를 종료하지만, 두 번째 로그인 POST를 보내지 않고 취소를 다시 시도할 수 있습니다. 종료 상태인 `failed` 응답은 흐름을 해제하고 정규화된 실패 사유를 표시하며, `succeeded` 응답만 로그인 성공을 알립니다. `cancelled`로 확인된 응답은 흐름을 해제하여 새 기기 코드 로그인을 시작할 수 있게 합니다. HTTP 404와 `unknown_flow` 코드가 명확하게 반환된 경우에도 만료된 흐름 ID를 해제하여 새 기기 코드 로그인을 시작할 수 있게 하지만, 로그인 성공이나 취소 확정으로 표시하지 않습니다. 이전 흐름에서 늦게 도착한 POST·GET·DELETE 응답은 새 흐름을 변경하거나 새 흐름의 로그인이 성공했다고 알릴 수 없습니다.
+
+## 스트리밍 줄바꿈
+
+공유 SSE 디코더는 LF, CRLF 및 단독 CR 줄바꿈을 처리하며 네트워크 청크 사이에서 구분자가 나뉘어도 동작합니다. 호환 제공자는 LF 형식으로만 스트림을 만들 필요가 없습니다.

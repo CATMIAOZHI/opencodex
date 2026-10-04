@@ -6,6 +6,7 @@ import { formatAccountPriority } from "../src/account-priority";
 import CodexAccountPool from "../src/components/CodexAccountPool";
 import type { CodexAccountEntry, CodexAccountPoolController } from "../src/hooks/useCodexAccountPool";
 import { LanguageProvider } from "../src/i18n/provider";
+import { en } from "../src/i18n/en";
 import { acceptActionDialog, actionDialogOpen } from "./helpers/action-dialog";
 
 /**
@@ -40,6 +41,7 @@ const legacyAccount: LegacyCodexAccountEntry = {
   isMain: false,
   paused: false,
   priority: 0,
+  autoSwitchThresholdOverride: null,
   hasCredential: true,
   quota: { resetCredits: 2, updatedAt: 1 },
 };
@@ -78,6 +80,8 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchingId: null,
     pauseUpdatingId: null,
     priorityUpdatingId: null,
+    autoSwitchUpdatingId: null,
+    creditsAfterLimitUpdatingId: null,
     pausingExhausted: false,
     activeNeedsReauth: false,
     activePinnedId: null,
@@ -88,6 +92,9 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchAccount: async () => ({ ok: true, activeId: null }),
     setAccountPaused: async () => ({ ok: true }),
     setAccountPriority: async () => ({ ok: true }),
+    setAccountAutoSwitchThreshold: async () => ({ ok: true }),
+    setAccountCreditsAfterLimit: async () => ({ ok: true }),
+    setAllCreditsAfterLimit: async () => ({ ok: true }),
     pauseExhaustedAccounts: async () => ({ ok: true, pausedCount: 0 }),
     saveAlias: async () => ({ ok: true }),
     removeAccount: async () => ({ ok: false, reason: "request" }),
@@ -201,6 +208,8 @@ async function chooseOrder(selectId: string, value: string): Promise<void> {
   // open (050): the control is on demand, not wallpaper on every card.
   const accountId = selectId.replace(/^codex-account-priority-/, "");
   const more = [...host.querySelectorAll<HTMLDetailsElement>("details.codex-account-more")]
+    // The main card has its own ⋯ (credits switch only); its order select is always inline.
+    .filter(d => !d.querySelector("summary")?.getAttribute("aria-label")?.endsWith(en["codexAuth.mainAccount"]))
     .find(d => d.querySelector("summary")?.getAttribute("aria-label")?.includes("—") && d.closest(".card")?.textContent?.includes(accountId.replace("pool-", "")));
   if (more && !host.querySelector(`#${selectId}`)) {
     await act(async () => { more.querySelector("summary")!.click(); });

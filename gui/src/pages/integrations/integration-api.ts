@@ -17,6 +17,8 @@ export const FILE_INTEGRATION_CLIENTS = [
   "raycast",
   "omo",
   "cline",
+  "kilo",
+  "droid",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];
@@ -29,6 +31,7 @@ export type IntegrationReason =
   | "unowned-key"
   | "blocked-container"
   | "ambiguous-selector"
+  | "candidate-conflict"
   | "unresolvable-path";
 
 export type IntegrationRefusalReason =
@@ -62,6 +65,8 @@ export interface IntegrationStatus {
   appliedAt?: string;
   lastOpId?: string;
   reason?: IntegrationReason;
+  conflictPaths?: string[];
+  candidateFailurePath?: string;
   /**
    * The store this client reads instead of `configPath`, when one exists.
    *
@@ -76,6 +81,26 @@ export interface IntegrationStatus {
   profileId?: number;
   enabled?: boolean;
   raycast?: RaycastInstall;
+  droidReasoning?: DroidReasoningStatus;
+}
+
+export interface DroidReasoningModel {
+  model: string;
+  label: string;
+  efforts: string[];
+}
+
+export interface DroidReasoningStatus {
+  models: DroidReasoningModel[];
+  defaults: Record<string, string>;
+}
+
+/** A candidate issue can block adding Kilo while removal still targets its recorded file. */
+export function canDisableKiloWithCandidateIssue(status: IntegrationStatus): boolean {
+  return status.clientId === "kilo" && !!status.lastOpId
+    && (status.reason === "candidate-conflict"
+      || (status.state === "unsafe" && !!status.candidateFailurePath
+        && status.candidateFailurePath !== status.configPath));
 }
 
 export interface IntegrationStateListEnvelope {
@@ -152,6 +177,7 @@ export interface ToggleIntegrationOptions {
   overwriteConflict?: boolean;
   profileId?: number;
   binding?: IntegrationPlanBinding;
+  droidReasoningDefaults?: Record<string, string>;
 }
 
 export interface RestoreIntegrationOptions {
@@ -238,6 +264,7 @@ const PLAN_SCHEMA_PATHS = new Set([
   "providers.[id=opencodex]",
   "settings.providers.opencodex",
   "catalog.providers.opencodex",
+  "customModels.*",
   // ZCode reads its providers from a second file; a plan for it publishes that
   // file's templates, and a path missing here is rejected as an invalid preview.
   "config.providerConfigRules.providerRules.[providerId=opencodex]",
@@ -451,9 +478,14 @@ export async function previewIntegrationMutation(
   operation: Exclude<IntegrationPlanOperation, "restore">,
   signal?: AbortSignal,
   profileId?: number,
+  droidReasoningDefaults?: Record<string, string>,
 ) {
   const path = profileId === undefined ? "/api/client-integrations/preview" : `${profilePath(profileId)}/preview`;
-  const requestBody = profileId === undefined ? { clientId: client, operation } : { operation };
+  const requestBody = {
+    ...(profileId === undefined ? { clientId: client } : {}),
+    operation,
+    ...(client === "droid" && droidReasoningDefaults !== undefined ? { droidReasoningDefaults } : {}),
+  };
   const plan = parseIntegrationMutationPlan(await readResponse<unknown>(await fetch(`${apiBase}${path}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody), signal,
   })));
@@ -478,14 +510,15 @@ export async function previewIntegrationRestore(
 }
 
 export async function toggleIntegration(apiBase: string, client: FileIntegrationClientId, options: ToggleIntegrationOptions) {
-  const { enabled, signal, overwriteConflict, profileId, binding } = options;
+  const { enabled, signal, overwriteConflict, profileId, binding, droidReasoningDefaults } = options;
   const expectedOperation: IntegrationPlanOperation = enabled ? (overwriteConflict ? "overwrite" : "apply") : "disable";
   let result: IntegrationToggleResult | { ok: false; message?: string; results?: unknown };
   try {
     result = await readResponse<IntegrationToggleResult | { ok: false; message?: string; results?: unknown }>(await fetch(`${apiBase}${clientPath(client, profileId)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled, ...(overwriteConflict === true ? { overwriteConflict: true } : {}), ...binding }),
+      body: JSON.stringify({ enabled, ...(overwriteConflict === true ? { overwriteConflict: true } : {}), ...binding,
+        ...(client === "droid" && droidReasoningDefaults !== undefined ? { droidReasoningDefaults } : {}) }),
       signal,
     }));
   } catch (error) {

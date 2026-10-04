@@ -14,6 +14,7 @@
 //! reading that must never happen is "the resolve failed, so nobody must be listening".
 
 use crate::endpoint::ProxyEndpoint;
+use crate::ownership::Recorded;
 use serde::Deserialize;
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -52,6 +53,65 @@ pub struct Port {
     pub configured: u16,
 }
 
+/// Whether the CLI says a desktop takeover can be offered.
+///
+/// The token is the binding a later `ocx service claim` repeats back: it covers the exact
+/// subject and managing-CLI observations the consent was approved against, so a claim made
+/// after either moved is refused rather than recorded.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Takeover {
+    #[serde(rename_all = "camelCase")]
+    Supported {
+        protocol_version: u64,
+        minimum_cli_version: String,
+        token: String,
+    },
+    Blocked {
+        reason: String,
+        detail: String,
+    },
+}
+
+impl Default for Takeover {
+    /// An older bundled CLI carries no takeover answer at all; silence is not approval.
+    fn default() -> Self {
+        Self::Blocked {
+            reason: "unreported".to_owned(),
+            detail: "the bundled CLI did not report takeover compatibility".to_owned(),
+        }
+    }
+}
+
+/// Which side of the CLI-versus-runtime comparison runs newer.
+///
+/// The strings are the wire values the CLI emits; `Unknown` also stands in for an
+/// absent `versionSkew` document or a future relation string. Unknown display metadata
+/// must not discard an otherwise valid live-runtime answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VersionRelation {
+    Match,
+    CliNewer,
+    ProxyNewer,
+    Incomparable,
+    #[serde(other)]
+    Unknown,
+}
+
+/// The bundled CLI's version laid next to the live runtime's, as the CLI computed it.
+/// The warning is the operator-facing sentence `ocx status` already prints; this shell
+/// repeats it verbatim so two surfaces never describe the same skew differently.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionSkew {
+    pub cli_version: String,
+    pub proxy_version: Option<String>,
+    pub skewed: bool,
+    pub relation: VersionRelation,
+    pub warning: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Resolved {
@@ -60,6 +120,16 @@ pub struct Resolved {
     pub config_home: String,
     pub port: Port,
     pub liveness: Liveness,
+    /// The recorded runtime owner, already in the CLI's three answers. Absent on older
+    /// documents, which read as unknown rather than as nobody owning the runtime.
+    #[serde(default)]
+    pub ownership: Recorded,
+    #[serde(default)]
+    pub takeover: Takeover,
+    /// The version comparison, absent on every CLI older than this field and on a
+    /// proven absence. Absent reads as unknown, never as a match.
+    #[serde(default)]
+    pub version_skew: Option<VersionSkew>,
 }
 
 impl Resolved {
@@ -72,6 +142,21 @@ impl Resolved {
 
     pub fn home(&self) -> PathBuf {
         PathBuf::from(&self.config_home)
+    }
+
+    /// The runtime's version relative to the bundled CLI's, or Unknown when the
+    /// document does not say — including every CLI that predates the field.
+    pub fn runtime_relation(&self) -> VersionRelation {
+        self.version_skew
+            .as_ref()
+            .map_or(VersionRelation::Unknown, |skew| skew.relation)
+    }
+
+    /// The skew warning when there is a confirmed difference worth surfacing.
+    pub fn skew_warning(&self) -> Option<&str> {
+        self.version_skew
+            .as_ref()
+            .and_then(|skew| skew.warning.as_deref())
     }
 }
 
@@ -121,6 +206,10 @@ pub enum LiveVerdict {
     NotLive,
     /// It is a proxy, on an address this shell can reach. Attach as a guest.
     Attach,
+    /// A Child's client runtime, on loopback. It serves Codex through its Home and the Child's own
+    /// dashboard, not the management plane, and it is never taken over: the shell attaches to it as
+    /// a guest and asks nothing. When it is the child this app started, that attach is ownership.
+    Client,
     /// Something is listening and this shell cannot use it. Never a reason to start a second one.
     Unusable(String),
 }
@@ -141,10 +230,12 @@ pub fn loopback_reachable(hostname: Option<&str>) -> bool {
 /// Read a live verdict.
 ///
 /// Liveness answers "is something there", and core's predicate accepts a connected client's
-/// listener on purpose so duplicate-start avoidance can see it. This shell needs the management
-/// plane, so it has to discriminate on the role the CLI carried: a client listener serves machine
-/// routes, not `/api/*`, and attaching to it would report Ready against an endpoint the dashboard
-/// and the tray cannot use.
+/// listener on purpose so duplicate-start avoidance can see it. The shell discriminates on the role
+/// the CLI carried: a client listener serves machine routes and the Child's dashboard, not `/api/*`,
+/// and the takeover a proxy can be offered does not apply to it. It is also what a Child runs,
+/// including this app's own sidecar after Connect as Child, so it is attached to
+/// ([`LiveVerdict::Client`]) rather than refused. Refusing it failed every recovery on a Child whose
+/// runtime restarted outside the app, and each failure scheduled the next.
 pub fn live_verdict(resolution: &Resolution) -> LiveVerdict {
     let Some(resolved) = resolution.resolved() else {
         return LiveVerdict::NotLive;
@@ -152,11 +243,7 @@ pub fn live_verdict(resolution: &Resolution) -> LiveVerdict {
     if resolved.liveness.status != Status::Live {
         return LiveVerdict::NotLive;
     }
-    if resolved.liveness.role.as_deref() == Some("client") {
-        return LiveVerdict::Unusable(
-            "a connected client is listening on this port, not a proxy this app can manage".into(),
-        );
-    }
+    let client = resolved.liveness.role.as_deref() == Some("client");
     if !loopback_reachable(resolved.liveness.hostname.as_deref()) {
         return LiveVerdict::Unusable(format!(
             "the runtime is bound to {} and this app only speaks to loopback",
@@ -166,6 +253,9 @@ pub fn live_verdict(resolution: &Resolution) -> LiveVerdict {
                 .as_deref()
                 .unwrap_or("an unknown address")
         ));
+    }
+    if client {
+        return LiveVerdict::Client;
     }
     LiveVerdict::Attach
 }
@@ -228,8 +318,10 @@ pub async fn run(app: &AppHandle, deadline: Instant) -> Resolution {
 #[cfg(test)]
 mod tests {
     use super::{
-        live_verdict, loopback_reachable, may_start, read, LiveVerdict, Resolution, Status, SCHEMA,
+        live_verdict, loopback_reachable, may_start, read, LiveVerdict, Resolution, Status,
+        Takeover, VersionRelation, SCHEMA,
     };
+    use crate::ownership::{Owner, Recorded};
 
     const LIVE: &str = r#"{"schema":"ocx-resolve/1","cliVersion":"2.61.0","configHome":"/h",
         "port":{"effective":10100,"configured":10100,"source":"runtime-record"},
@@ -263,17 +355,23 @@ mod tests {
     }
 
     #[test]
-    fn a_connected_client_is_live_but_not_a_runtime_to_attach_to() {
+    fn a_connected_client_is_attached_to_and_never_started_beside() {
         let client = LIVE.replace(
             r#""version":"2.61.0""#,
             r#""version":"2.61.0","role":"client""#,
         );
         let resolution = read(Some(0), client.as_bytes(), b"");
+        // A Child's runtime: attached to as a guest, never taken over and never refused.
+        assert_eq!(live_verdict(&resolution), LiveVerdict::Client);
+        // Live is still live: it is never a reason to start a second one.
+        assert!(!may_start(&resolution));
+        // Off loopback it is as unusable as any other listener there.
+        let elsewhere = client.replace(r#""pid":42"#, r#""pid":42,"hostname":"::1""#);
+        let resolution = read(Some(0), elsewhere.as_bytes(), b"");
         assert!(matches!(
             live_verdict(&resolution),
             LiveVerdict::Unusable(_)
         ));
-        // Live and unusable is still live: it is never a reason to start a second one.
         assert!(!may_start(&resolution));
     }
 
@@ -316,6 +414,111 @@ mod tests {
             assert!(matches!(resolution, Resolution::Unknown(_)), "{code:?}");
             assert!(!may_start(&resolution));
         }
+    }
+
+    #[test]
+    fn ownership_and_takeover_answers_are_read_whole() {
+        let document = format!(
+            "{}{}}}",
+            LIVE.strip_suffix('}').unwrap(),
+            r#","ownership":{"kind":"owned","ownership":{"owner":"cli","installId":"npm-1","consentGeneration":2},"revision":9},"takeover":{"kind":"supported","protocolVersion":1,"minimumCliVersion":"2.61.0","token":"abc"}"#
+        );
+        let resolution = read(Some(0), document.as_bytes(), b"");
+        let resolved = match resolution.resolved() {
+            Some(resolved) => resolved.clone(),
+            None => panic!("{}", resolution.reason().unwrap()),
+        };
+        assert_eq!(
+            resolved.ownership,
+            Recorded::Owned {
+                ownership: crate::ownership::Claim {
+                    owner: Owner::Cli,
+                    install_id: "npm-1".to_owned(),
+                    consent_generation: 2,
+                },
+                revision: 9,
+            }
+        );
+        assert!(matches!(
+            resolved.takeover,
+            Takeover::Supported { ref token, .. } if token == "abc"
+        ));
+    }
+
+    #[test]
+    fn a_missing_ownership_or_takeover_answer_is_not_consent() {
+        // Older bundled CLIs carry neither field; silence must read unknown/blocked, never
+        // "nobody owns it" or "takeover supported".
+        let resolved = read(Some(0), LIVE.as_bytes(), b"")
+            .resolved()
+            .expect("a document")
+            .clone();
+        assert!(matches!(resolved.ownership, Recorded::Unknown { .. }));
+        assert!(matches!(resolved.takeover, Takeover::Blocked { .. }));
+        assert_eq!(resolved.takeover, Takeover::default());
+    }
+
+    #[test]
+    fn a_blocked_takeover_carries_its_reason() {
+        let document = format!(
+            "{}{}}}",
+            LIVE.strip_suffix('}').unwrap(),
+            r#","ownership":{"kind":"none","revision":0},"takeover":{"kind":"blocked","reason":"managing-cli-unsupported","detail":"path uses 2.59.0","minimumCliVersion":"2.61.0"}"#
+        );
+        let resolved = read(Some(0), document.as_bytes(), b"")
+            .resolved()
+            .expect("a document")
+            .clone();
+        assert_eq!(resolved.ownership, Recorded::None { revision: 0 });
+        assert_eq!(
+            resolved.takeover,
+            Takeover::Blocked {
+                reason: "managing-cli-unsupported".to_owned(),
+                detail: "path uses 2.59.0".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn the_version_skew_is_read_whole_and_defaults_to_unknown() {
+        // A document carrying the comparison hands the shell both the direction and the
+        // operator-facing warning verbatim.
+        let document = format!(
+            "{}{}}}",
+            LIVE.strip_suffix('}').unwrap(),
+            r#","versionSkew":{"cliVersion":"2.61.0","proxyVersion":"2.62.0","skewed":true,"relation":"proxy-newer","warning":"CLI 2.61.0 does not match the running proxy 2.62.0"}"#
+        );
+        let resolved = read(Some(0), document.as_bytes(), b"")
+            .resolved()
+            .expect("a document")
+            .clone();
+        assert_eq!(resolved.runtime_relation(), VersionRelation::ProxyNewer);
+        assert_eq!(
+            resolved.skew_warning(),
+            Some("CLI 2.61.0 does not match the running proxy 2.62.0")
+        );
+        // An older CLI sends nothing; absent must read unknown, not a match.
+        let resolved = read(Some(0), LIVE.as_bytes(), b"")
+            .resolved()
+            .expect("a document")
+            .clone();
+        assert_eq!(resolved.runtime_relation(), VersionRelation::Unknown);
+        assert_eq!(resolved.skew_warning(), None);
+    }
+
+    #[test]
+    fn a_future_version_relation_keeps_the_live_answer() {
+        let document = format!(
+            "{}{}}}",
+            LIVE.strip_suffix('}').unwrap(),
+            r#","versionSkew":{"cliVersion":"2.61.0","proxyVersion":"2.62.0","skewed":true,"relation":"future-comparison","warning":"upgrade the CLI"}"#
+        );
+        let resolution = read(Some(0), document.as_bytes(), b"");
+        let resolved = resolution.resolved().expect("a live answer");
+        assert_eq!(resolved.runtime_relation(), VersionRelation::Unknown);
+        assert_eq!(resolved.skew_warning(), Some("upgrade the CLI"));
+        assert!(matches!(live_verdict(&resolution), LiveVerdict::Attach));
+        assert!(!may_start(&resolution));
     }
 
     #[test]

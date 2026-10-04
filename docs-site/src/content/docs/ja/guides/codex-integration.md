@@ -109,7 +109,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-WSL では、`CODEX_HOME` が設定されておらず、Linux `~/.codex/config.toml` が存在しない場合、opencodex は `/mnt/c/Users/*/.codex/config.toml` にある単一の Windows Codex デスクトップ ホームもチェックします。候補が 1 つだけ存在する場合は、そのディレクトリが使用されるため、WSL アプリサーバー モードと Windows Codex デスクトップは同じ設定ファイルと認証ファイルを共有します。この検出をオーバーライドするには、`CODEX_HOME` を明示的に設定します。
+WSL では、`CODEX_HOME` が設定されておらず、Linux の `~/.codex` ディレクトリが存在しないか、Codex の状態 (`config.toml`, `auth.json`, `sessions`, `history.jsonl`) を持たない場合、opencodex は `/mnt/c/Users/*/.codex/config.toml` にある単一の Windows Codex デスクトップ ホームもチェックします。候補が 1 つだけ存在する場合は、そのディレクトリが使用されるため、WSL アプリサーバー モードと Windows Codex デスクトップは同じ設定ファイルと認証ファイルを共有します。この検出をオーバーライドするには、`CODEX_HOME` を明示的に設定します。
 
 Windows では、ChatGPT/Codex アプリが `%USERPROFILE%\\.codex` を読み取りながら、Orca シェルは `CODEX_HOME` と `ORCA_CODEX_HOME` の両方を Orca のバンドルされたランタイム ホームに設定できます。 `ocx status` および `ocx doctor` は、この正確な不一致について警告し、編集されたターゲット パスを出力します。バックグラウンド サービスが Orca シェルからインストールされている場合は、最初に元のシェルからアンインストールし、次に `CODEX_HOME` をアプリ ホームに設定し、`ORCA_CODEX_HOME` の設定を解除し、同期/復元を再実行して、サービスを再度インストールします。
 
@@ -246,6 +246,8 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 
 `ocx account refresh openai` と `ocx account list openai --quota --refresh` は使用量のみを取得します。モデル検証はクォータを消費するため、人間のダッシュボードセッションが必要です。回復後に `ocx gui` を開き、**Refresh quotas** をクリックしてください。ヘッドレスホストでもブラウザーからそのダッシュボードにアクセスします。管理者トークンだけでは検証できません。一時停止中でも検証できますが、アカウントの再開や選択は行いません。モデル認証エラーは検証または再認証に成功するまで表示されます。
 
+**Codex Set → Multi-auth** で **Codex Auth** 見出しの **Codex クレジット** スイッチを有効にすると、メインとプールの各アカウントで最後に取得したクレジットが Week の直下に表示されます。既定では無効で、`showCodexCredits` として保存されます。残高はロケールに合わせた数値で、報告があれば無制限または超過利用上限の警告を表示します。総上限が提供されないため、バーは割合ではなく利用可能な状態を示します。この設定は表示のみを制御し、新しいログインにはそのアカウントの取得結果が必要です。
+
 バックグラウンド再検証は別機能で既定では無効です。Token Guardian、`openai` の `proactive` 更新ポリシー、`tokenGuardian.codexWarmupEnabled` が必要で、登録検証待ちのアカウントは除外します。
 
 ### アカウントがリクエストを処理しなくなった理由
@@ -277,7 +279,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-opencodex が管理対象 [バックグラウンドサービス](/reference/cli/#ocx-service) として実行される場合、`OCX_SERVICE=1` が設定されるため、サービス主導の再起動によって Codex 設定がスラッシングされなくなります。明示的な `ocx stop` / `ocx service stop` のみがネイティブ Codex を復元します。
+opencodex が管理対象 [バックグラウンドサービス](/ja/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove) として実行される場合、`OCX_SERVICE=1` が設定されるため、サービス主導の再起動によって Codex 設定がスラッシングされなくなります。明示的な `ocx stop` / `ocx service stop` のみがネイティブ Codex を復元します。
 
 ## ページ分割履歴の保護による拒否
 
