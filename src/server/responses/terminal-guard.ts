@@ -183,6 +183,7 @@ function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): 
   const cachedInputTokens = sumOptional("cachedInputTokens");
   const cacheReadInputTokens = sumOptional("cacheReadInputTokens");
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
+  const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
   const providerCredits = sumOptional("providerCredits");
   const inputTokens = first.inputTokens + second.inputTokens;
@@ -194,6 +195,7 @@ function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): 
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
     ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
     ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
+    ...(cacheCreation1hInputTokens !== undefined ? { cacheCreation1hInputTokens } : {}),
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(first.estimated || second.estimated ? { estimated: true } : {}),

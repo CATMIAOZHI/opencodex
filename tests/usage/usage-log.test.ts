@@ -687,6 +687,10 @@ describe("usage log", () => {
       { ...valid(2), firstOutputMs: "3" },
       { ...valid(2), usage: { inputTokens: "2", outputTokens: 1 } },
       { ...valid(2), usage: { inputTokens: 2, outputTokens: "1" } },
+      // The 1-hour cache-write share must clear the same non-negative-finite roster as the
+      // read/write split it belongs to; a dirty count drops the whole attempt, not just the field.
+      { ...valid(2), usage: { inputTokens: 2, outputTokens: 1, cacheCreation1hInputTokens: -1 } },
+      { ...valid(2), usage: { inputTokens: 2, outputTokens: 1, cacheCreation1hInputTokens: "4" } },
     ];
     for (const middle of malformed) {
       writeFileSync(usageLogPath(), `${JSON.stringify({
@@ -1014,6 +1018,41 @@ describe("usage log", () => {
         estimated: true,
       },
       totalTokens: 110,
+    });
+  });
+
+  // The persisted row is the ONLY place the read-time repricing can learn that a write was a
+  // 1-hour one, and `normalizeUsageValue` rebuilds usage from a whitelist, so a field missing from
+  // that whitelist would silently downgrade every 1-hour write to the 5-minute rate on reload.
+  test("round-trips the 1-hour cache-write split", () => {
+    appendUsageEntry({
+      requestId: "ocx-cache-1h",
+      timestamp: 4,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      status: 200,
+      durationMs: 22,
+      usageStatus: "reported",
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 10,
+        cachedInputTokens: 400_000,
+        cacheReadInputTokens: 400_000,
+        cacheCreationInputTokens: 600_000,
+        cacheCreation1hInputTokens: 600_000,
+      },
+      totalTokens: 1_000_010,
+    });
+
+    const persisted = readUsageEntries()[0]!;
+    expect(persisted.requestId).toBe("ocx-cache-1h");
+    expect(persisted.usage).toEqual({
+      inputTokens: 1_000_000,
+      outputTokens: 10,
+      cachedInputTokens: 400_000,
+      cacheReadInputTokens: 400_000,
+      cacheCreationInputTokens: 600_000,
+      cacheCreation1hInputTokens: 600_000,
     });
   });
 

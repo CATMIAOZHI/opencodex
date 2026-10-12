@@ -581,6 +581,9 @@ function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined 
     ...(typeof usage.cachedInputTokens === "number" ? { cachedInputTokens: usage.cachedInputTokens } : {}),
     ...(typeof usage.cacheReadInputTokens === "number" ? { cacheReadInputTokens: usage.cacheReadInputTokens } : {}),
     ...(typeof usage.cacheCreationInputTokens === "number" ? { cacheCreationInputTokens: usage.cacheCreationInputTokens } : {}),
+    // Whitelist rebuild: a field missing here is DROPPED from the persisted row, which would leave
+    // every 1-hour cache write repriced at the 5-minute rate after a reload.
+    ...(typeof usage.cacheCreation1hInputTokens === "number" ? { cacheCreation1hInputTokens: usage.cacheCreation1hInputTokens } : {}),
     ...(typeof usage.reasoningOutputTokens === "number" ? { reasoningOutputTokens: usage.reasoningOutputTokens } : {}),
     ...(isNonNegativeFiniteNumber(usage.providerCredits) ? { providerCredits: usage.providerCredits } : {}),
     ...(usage.estimated ? { estimated: true } : {}),
@@ -625,6 +628,7 @@ function normalizeAttemptUsage(raw: unknown): OcxUsage | null {
     "cachedInputTokens",
     "cacheReadInputTokens",
     "cacheCreationInputTokens",
+    "cacheCreation1hInputTokens",
     "reasoningOutputTokens",
     "providerCredits",
   ] as const) {

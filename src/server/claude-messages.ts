@@ -61,6 +61,7 @@ import { captureRouteStaticPolicy, NoEligiblePolicyCandidateError, previewRouteM
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
+import { anthropicCacheCreation1hTokens } from "../usage/anthropic-cache-breakdown";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext } from "./request-log";
 import { recordGenerationEvent } from "./request-log-generation-window";
@@ -276,12 +277,16 @@ function uuidFromHex(hex32: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
-export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } | undefined {
+export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number; cacheCreation1hInputTokens?: number } | undefined {
   if (!usage) return undefined;
   const num = (v: unknown) => typeof v === "number" ? v : 0;
   const hasCache = usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined;
   const read = num(usage.cache_read_input_tokens);
   const write = num(usage.cache_creation_input_tokens);
+  // Derived from the raw object, never from `num()`: a malformed breakdown must drop the whole
+  // split rather than report the half that happens to coerce, and `num()` would erase that
+  // distinction by turning an invalid count into a trusted 0.
+  const write1h = anthropicCacheCreation1hTokens(usage, write);
   // Anthropic input_tokens excludes cache read/write; normalize to the canonical
   // inclusive convention (types.ts OcxUsage / devlog 070). cached = READS only.
   return {
@@ -291,6 +296,7 @@ export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: numb
       cachedInputTokens: read,
       cacheReadInputTokens: read,
       cacheCreationInputTokens: write,
+      ...(write1h !== undefined && write1h > 0 ? { cacheCreation1hInputTokens: write1h } : {}),
     } : {}),
   };
 }

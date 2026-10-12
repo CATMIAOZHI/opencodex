@@ -1,5 +1,6 @@
 import { namespacedToolName, type AdapterEvent, type OcxMessage, type OcxParsedRequest, type OcxUsage } from "../../types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
+import { anthropicCacheCreation1hTokens } from "../../usage/anthropic-cache-breakdown";
 import { isValidCodingAgentToolNamePart } from "./tool-catalog";
 
 /**
@@ -165,6 +166,9 @@ function usageFromAnthropicShape(usage: Record<string, unknown>): OcxUsage | und
   // that could carry those tokens instead, so the turn under-reported usage and cost.
   const cacheReadTotal = cachedInputTokens ?? 0;
   const cacheCreationTotal = cacheCreationInputTokens ?? 0;
+  // 1-hour writes bill at 2x base input, so the split has to survive this leg too; a Claude Code
+  // deployment on `cacheRetention: "long"` would otherwise be priced entirely at the 5-minute rate.
+  const cacheCreation1hTotal = anthropicCacheCreation1hTokens(usage, cacheCreationTotal) ?? 0;
   if (inputTokens === 0 && outputTokens === 0 && cacheReadTotal === 0 && cacheCreationTotal === 0) {
     return undefined;
   }
@@ -174,6 +178,7 @@ function usageFromAnthropicShape(usage: Record<string, unknown>): OcxUsage | und
     totalTokens: inputTokens + outputTokens,
     ...(cacheReadTotal > 0 ? { cachedInputTokens: cacheReadTotal, cacheReadInputTokens: cacheReadTotal } : {}),
     ...(cacheCreationTotal > 0 ? { cacheCreationInputTokens: cacheCreationTotal } : {}),
+    ...(cacheCreation1hTotal > 0 ? { cacheCreation1hInputTokens: cacheCreation1hTotal } : {}),
   };
 }
 
@@ -201,12 +206,14 @@ function mergePartialUsage(previous: OcxUsage | undefined, next: OcxUsage): OcxU
     next.cacheReadInputTokens ?? next.cachedInputTokens ?? 0,
   );
   const cacheCreation = Math.max(previous.cacheCreationInputTokens ?? 0, next.cacheCreationInputTokens ?? 0);
+  const cacheCreation1h = Math.max(previous.cacheCreation1hInputTokens ?? 0, next.cacheCreation1hInputTokens ?? 0);
   return {
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
     ...(cacheRead > 0 ? { cachedInputTokens: cacheRead, cacheReadInputTokens: cacheRead } : {}),
     ...(cacheCreation > 0 ? { cacheCreationInputTokens: cacheCreation } : {}),
+    ...(cacheCreation1h > 0 ? { cacheCreation1hInputTokens: cacheCreation1h } : {}),
   };
 }
 

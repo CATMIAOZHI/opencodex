@@ -113,6 +113,84 @@ describe("adapter reasoning and usage details", () => {
     });
   });
 
+  test("Anthropic usage maps the 1-hour cache-write breakdown", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const events = await adapter.parseResponse?.(new Response(JSON.stringify({
+      content: [{ type: "text", text: "answer" }],
+      usage: {
+        input_tokens: 20,
+        output_tokens: 8,
+        cache_read_input_tokens: 4,
+        cache_creation_input_tokens: 6,
+        cache_creation: { ephemeral_5m_input_tokens: 2, ephemeral_1h_input_tokens: 4 },
+      },
+    })));
+
+    expect(events?.at(-1)).toEqual({
+      type: "done",
+      usage: {
+        // The split is a subset of the write total, which `inputTokens` still counts exactly once.
+        inputTokens: 30,
+        outputTokens: 8,
+        cachedInputTokens: 4,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 6,
+        cacheCreation1hInputTokens: 4,
+      },
+    });
+  });
+
+  test("Anthropic usage drops a 1-hour breakdown that contradicts the write total", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const events = await adapter.parseResponse?.(new Response(JSON.stringify({
+      content: [{ type: "text", text: "answer" }],
+      usage: {
+        input_tokens: 20,
+        output_tokens: 8,
+        cache_read_input_tokens: 4,
+        cache_creation_input_tokens: 6,
+        // 9 + 4 > 6: not a split we can bill against, so the whole block is discarded.
+        cache_creation: { ephemeral_5m_input_tokens: 9, ephemeral_1h_input_tokens: 4 },
+      },
+    })));
+
+    expect(events?.at(-1)).toEqual({
+      type: "done",
+      usage: {
+        inputTokens: 30,
+        outputTokens: 8,
+        cachedInputTokens: 4,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 6,
+      },
+    });
+  });
+
+  test("Anthropic usage treats a zero 1-hour split as no 1-hour tokens", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const events = await adapter.parseResponse?.(new Response(JSON.stringify({
+      content: [{ type: "text", text: "answer" }],
+      usage: {
+        input_tokens: 20,
+        output_tokens: 8,
+        cache_read_input_tokens: 4,
+        cache_creation_input_tokens: 6,
+        cache_creation: { ephemeral_5m_input_tokens: 6, ephemeral_1h_input_tokens: 0 },
+      },
+    })));
+
+    expect(events?.at(-1)).toEqual({
+      type: "done",
+      usage: {
+        inputTokens: 30,
+        outputTokens: 8,
+        cachedInputTokens: 4,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 6,
+      },
+    });
+  });
+
   test("Anthropic usage does not fabricate cache tokens when absent", async () => {
     const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
     const events = await adapter.parseResponse?.(new Response(JSON.stringify({

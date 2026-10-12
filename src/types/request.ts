@@ -466,6 +466,9 @@ export interface OcxUrlCitation {
  * - `cachedInputTokens` is cache READ tokens only (a subset of `inputTokens`).
  * - `cacheReadInputTokens`/`cacheCreationInputTokens` carry the read/write split when
  *   the provider reports both; reads mirror `cachedInputTokens`.
+ * - `cacheCreation1hInputTokens` is the 1-hour TTL share of `cacheCreationInputTokens` when the
+ *   provider reports the TTL split (Anthropic `usage.cache_creation.ephemeral_1h_input_tokens`).
+ *   Subset-only, same as the read/write split: never re-added to `inputTokens` or `totalTokens`.
  * - `totalTokens` = inputTokens + outputTokens. Never re-add cache detail on top.
  */
 export interface OcxUsage {
@@ -483,6 +486,13 @@ export interface OcxUsage {
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /**
+   * 1-hour share of `cacheCreationInputTokens`. Anthropic prices 1-hour cache writes at 2x base
+   * input against 1.25x for 5-minute writes, so the split is what makes a `long`-retention
+   * deployment bill correctly. Absent means the upstream reported no usable split, and every
+   * reader must then keep treating the whole write total as 5-minute.
+   */
+  cacheCreation1hInputTokens?: number;
   reasoningOutputTokens?: number;
   estimated?: boolean;
   /**

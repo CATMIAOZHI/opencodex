@@ -25,6 +25,7 @@ import { normalizeAnthropicOutputSchema } from "./anthropic-output-schema";
 import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
+import { anthropicCacheCreation1hTokens } from "../usage/anthropic-cache-breakdown";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
@@ -619,6 +620,10 @@ function usageFromAnthropic(usage: unknown): OcxUsage | undefined {
   // Invalid upstream usage is unreported, not a measured zero or a string that
   // can pass through aggregation into a human-readable usage report.
   if (input === undefined || output === undefined || read === undefined || write === undefined) return undefined;
+  // A 1-hour cache write bills at 2x base input, not the 5-minute rate, so a
+  // `cacheRetention: "long"` deployment is under-reported unless the upstream split
+  // reaches the ledger. Undefined means the upstream carried no usable split.
+  const write1h = anthropicCacheCreation1hTokens(usage, write);
   const hasCache = usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined;
   // Anthropic reports input_tokens EXCLUSIVE of cache read/write; normalize to the
   // canonical inclusive convention (types.ts OcxUsage / devlog 070).
@@ -636,6 +641,7 @@ function usageFromAnthropic(usage: unknown): OcxUsage | undefined {
       cachedInputTokens: read,
       cacheReadInputTokens: read,
       cacheCreationInputTokens: write,
+      ...(write1h !== undefined && write1h > 0 ? { cacheCreation1hInputTokens: write1h } : {}),
     } : {}),
   };
 }

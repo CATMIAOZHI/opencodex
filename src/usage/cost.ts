@@ -63,8 +63,24 @@ export interface CostTokens {
   input: number;
   output: number;
   cacheRead: number;
+  /** Total cache-WRITE tokens (5-minute + 1-hour). Never summed with `cacheWrite1h`. */
   cacheWrite: number;
+  /**
+   * The 1-hour share of `cacheWrite`, present only when the provider reported a TTL split that
+   * priced differently. A SUBSET of `cacheWrite`, so every existing reader of `cacheWrite` keeps
+   * meaning the same number.
+   */
+  cacheWrite1h?: number;
 }
+
+/**
+ * Anthropic Extended Cache TTL price ratio: a 1-hour write costs 2x base input against 1.25x for a
+ * 5-minute write, and the catalog only publishes the 5-minute rate. 2 / 1.25 = 1.6.
+ *
+ * Applied to the EFFECTIVE cost4 (after context-tier and priority multipliers) so a repriced
+ * deployment keeps those multipliers, and a `cacheWrite` rate of 0 stays 0.
+ */
+export const CACHE_WRITE_1H_RATE_MULTIPLIER = 1.6;
 
 export interface CostBreakdown {
   input: number;
@@ -147,6 +163,7 @@ export function normalizeCostTokens(usage: OcxUsage): CostTokens | null {
   const input = usage.inputTokens;
   const output = usage.outputTokens;
   const cacheWrite = usage.cacheCreationInputTokens ?? 0;
+  const reportedWrite1h = usage.cacheCreation1hInputTokens;
   const primaryRead = usage.cacheReadInputTokens ?? usage.cachedInputTokens ?? 0;
   const candidates: number[] = [primaryRead];
   if (typeof usage.cacheReadInputTokens !== "number"
@@ -157,11 +174,21 @@ export function normalizeCostTokens(usage: OcxUsage): CostTokens | null {
   for (const cacheRead of candidates) {
     if (![input, output, cacheRead, cacheWrite].every(finiteNonNegative)) return null;
     if (cacheRead + cacheWrite > input) continue;
+    // `cacheWrite1h` is a SUBSET of `cacheWrite`, so it deliberately stays OUT of the conservation
+    // check above: `input` already has the whole write total subtracted, and adding the 1-hour
+    // share again would turn a fully-1-hour row into an impossible read+write > input and erase
+    // its price entirely. Clamped rather than rejected for the same reason.
+    const write1h = reportedWrite1h !== undefined && finiteNonNegative(reportedWrite1h)
+      ? Math.min(reportedWrite1h, cacheWrite)
+      : 0;
     return {
       input: Math.max(0, input - cacheRead - cacheWrite),
       output,
       cacheRead,
       cacheWrite,
+      // Conditional key: the 4-key shape is asserted by existing callers and tests, so a row with
+      // no 1-hour split must serialize exactly as it did before this field existed.
+      ...(write1h > 0 ? { cacheWrite1h: write1h } : {}),
     };
   }
   return null;
@@ -172,7 +199,14 @@ export function calculateCost(tokens: CostTokens, cost4: Cost4): CostBreakdown {
   const input = cost4.input * tokens.input / 1_000_000;
   const output = cost4.output * tokens.output / 1_000_000;
   const cacheRead = cost4.cacheRead * tokens.cacheRead / 1_000_000;
-  const cacheWrite = cost4.cacheWrite * tokens.cacheWrite / 1_000_000;
+  // Fold the Extended-TTL uplift into the SAME `cacheWrite` cost bucket: the published rate is the
+  // 5-minute one, so the 1-hour share is repriced from it. Splitting the breakdown into a 5th
+  // field would change the /api/usage contract and every GUI consumer for no billing gain.
+  const write1h = Math.min(tokens.cacheWrite1h ?? 0, tokens.cacheWrite);
+  const write5m = tokens.cacheWrite - write1h;
+  const cacheWrite = (
+    cost4.cacheWrite * write5m + cost4.cacheWrite * CACHE_WRITE_1H_RATE_MULTIPLIER * write1h
+  ) / 1_000_000;
   return { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite };
 }
 
@@ -622,6 +656,9 @@ export function estimateComboCost(
     tokens.output += est.tokens.output;
     tokens.cacheRead += est.tokens.cacheRead;
     tokens.cacheWrite += est.tokens.cacheWrite;
+    // Only materialized once some attempt actually has a split, so a split-free combo keeps the
+    // 4-key token shape its consumers and tests assert.
+    if (est.tokens.cacheWrite1h) tokens.cacheWrite1h = (tokens.cacheWrite1h ?? 0) + est.tokens.cacheWrite1h;
     cost.input += est.cost.input;
     cost.output += est.cost.output;
     cost.cacheRead += est.cost.cacheRead;
