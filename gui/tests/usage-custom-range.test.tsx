@@ -382,6 +382,9 @@ test("Apply submits inclusive bounds once; Clear restores the held preset withou
 });
 
 test("missing, partial, invalid and reversed drafts make no request or applied-state change", async () => {
+  // The independent daily-cost panel may load an all-range drill-down. Only
+  // this panel's 30d report requests are owned by the draft/apply contract.
+  const primaryRequests = () => requests.filter(request => new URL(request.url).searchParams.get("range") === "30d");
   await mount();
   await respond(0, "held-valid-report");
   for (const [start, end, expected] of [
@@ -395,7 +398,7 @@ test("missing, partial, invalid and reversed drafts make no request or applied-s
     await apply();
     expect(error()).toContain(expected);
     expect(startInput().getAttribute("aria-invalid")).toBe("true");
-    expect(requests).toHaveLength(1);
+    expect(primaryRequests()).toHaveLength(1);
     expect(container.textContent).toContain("held-valid-report");
     expect(interval()).toBeUndefined();
   }
@@ -405,7 +408,7 @@ test("missing, partial, invalid and reversed drafts make no request or applied-s
   const previousInterval = interval();
   await enter("2020-09-16T10:20", "2020-09-15T10:20");
   await apply();
-  expect(requests).toHaveLength(2);
+  expect(primaryRequests()).toHaveLength(2);
   expect(interval()).toBe(previousInterval);
   expect(container.textContent).toContain("applied-valid-report");
   await clear();
@@ -493,7 +496,7 @@ test("the range panel is closed until asked for, and collapsing it keeps the app
   expect(toggle().getAttribute("aria-expanded")).toBe("false");
   expect(toggle().textContent).toContain("Custom date range");
   expect(container.querySelector('form[aria-label="Custom date range"]')).toBeNull();
-  expect(container.querySelectorAll('input[type="datetime-local"]')).toHaveLength(0);
+  expect(container.querySelectorAll('.usage-range input[type="datetime-local"]')).toHaveLength(0);
   expect(toggle().className).not.toContain("is-active");
   // Naming a panel that is not in the document would leave a dangling IDREF.
   expect(toggle().hasAttribute("aria-controls")).toBe(false);
@@ -501,7 +504,7 @@ test("the range panel is closed until asked for, and collapsing it keeps the app
   await click(toggle());
   expect(toggle().getAttribute("aria-expanded")).toBe("true");
   expect(toggle().getAttribute("aria-controls")).toBe(form().id);
-  expect(container.querySelectorAll('input[type="datetime-local"]')).toHaveLength(2);
+  expect(container.querySelectorAll('.usage-range input[type="datetime-local"]')).toHaveLength(2);
   expect(requests).toHaveLength(1);
 
   await enter("2020-09-15T10:20", "2020-09-15T10:21");
@@ -515,7 +518,7 @@ test("the range panel is closed until asked for, and collapsing it keeps the app
   // still say which window produced the numbers below.
   await click(toggle());
   expect(toggle().getAttribute("aria-expanded")).toBe("false");
-  expect(container.querySelectorAll('input[type="datetime-local"]')).toHaveLength(0);
+  expect(container.querySelectorAll('.usage-range input[type="datetime-local"]')).toHaveLength(0);
   expect(interval()).toBe(applied);
   expect(toggle().className).toContain("is-active");
   expect(container.textContent).toContain("custom-report-marker");

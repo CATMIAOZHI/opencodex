@@ -5,6 +5,7 @@ import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { routeModel } from "../../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import { normalizeToolSchemas } from "../../src/adapters/openai-responses/tool-schema";
 
 function buildBody(
   provider: OcxProviderConfig,
@@ -25,6 +26,25 @@ function buildBody(
 }
 
 describe("OpenCode Go strict Responses tool schemas", () => {
+  test("completes deeply nested schemas without mutating the caller or exhausting the call stack", () => {
+    let parameters: Record<string, unknown> = { type: "object", properties: {} };
+    for (let depth = 0; depth < 12_000; depth++) {
+      parameters = { type: "object", properties: { child: parameters } };
+    }
+    const body = { tools: [{ type: "function", name: "deep", parameters }] };
+    const normalized = normalizeToolSchemas(body, false, true) as typeof body;
+    let original = parameters;
+    let completed = normalized.tools[0]!.parameters;
+    for (let depth = 0; depth < 12_000; depth++) {
+      expect(original.required).toBeUndefined();
+      expect(completed.required).toEqual(["child"]);
+      original = (original.properties as Record<string, Record<string, unknown>>).child!;
+      completed = (completed.properties as Record<string, Record<string, unknown>>).child!;
+    }
+    expect(completed.required).toEqual([]);
+    expect(normalizeToolSchemas(normalized, false, true)).toBe(normalized);
+  });
+
   test("registry capability reaches both saved-provider enrichment and routing", () => {
     const entry = getProviderRegistryEntry("opencode-go")!;
     expect(entry.strictResponsesToolSchemas).toBe(true);

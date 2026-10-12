@@ -7,7 +7,7 @@
  * ten minutes (`b5o = 600000`) and mints a new one afterwards; this journal keeps
  * the same window.
  *
- * Rules (devlog/_plan/260923_claude_reset_grants/010_plan.md, "Ledger contract"):
+ * Rules (devlog/_fin/260923_claude_reset_grants/010_plan.md, "Ledger contract"):
  * - Every read-modify-write runs synchronously inside a cross-process
  *   `BEGIN IMMEDIATE` lock on a sibling SQLite file; nothing awaits inside it,
  *   and the upstream claim always runs after the open record is on disk.
@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { atomicWriteFileStreamed } from "../config/atomic-write";
 import { getConfigDir } from "../config/paths";
+import type { AnthropicInstanceId } from "./anthropic-instance-id";
 
 export const ANTHROPIC_RESET_LEASE_MS = 90_000;
 export const ANTHROPIC_RESET_RETRY_WINDOW_MS = 600_000;
@@ -83,7 +84,16 @@ export function anthropicOrgDigest(organizationUuid: string): string {
 }
 
 export function anthropicResetJournalPath(customDir?: string): string {
-  return join(customDir ?? getConfigDir(), "anthropic-reset-grant-ledger.json");
+  return anthropicResetJournalPathForInstance("anthropic", customDir);
+}
+
+export function anthropicResetJournalPathForInstance(instance: AnthropicInstanceId, customDir?: string): string {
+  return join(customDir ?? getConfigDir(), `${instance}-reset-grant-ledger.json`);
+}
+
+/** Namespace is in the path; A's version-1 journal bytes and record schema stay unchanged. */
+export function anthropicResetLedgerOptionsForInstance(instance: AnthropicInstanceId, customDir?: string): AnthropicResetLedgerOptions {
+  return { journalPath: anthropicResetJournalPathForInstance(instance, customDir) };
 }
 
 function isRecordShape(value: unknown): value is OperationRecord {

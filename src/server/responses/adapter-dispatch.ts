@@ -1,6 +1,11 @@
+import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { classifyAnthropic429 } from "../../oauth/anthropic-rate-limit-policy";
-import { rotateAnthropicAccountOnResponse } from "../../oauth/anthropic-account-refusal";
+import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
+import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
+import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
+import { transientSendCapFor } from "./request-send-budget";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
@@ -25,6 +30,7 @@ import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
 import {
   transientRetryPolicyFor,
+  resetReplayPolicyFor,
   rateLimitRetryPolicyFor,
   hasKeyPoolFailover,
   rotateProviderTransportOn401,
@@ -60,7 +66,7 @@ import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   AnthropicAccountCooldownError,
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-  getAnthropicPoolAccessSnapshot,
+  anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
 import {
@@ -96,8 +102,12 @@ import {
 } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { cancelBodyOnAbort } from "../../lib/abort";
+import { createCodexAuthDispatchGuard, releaseCodexAuthContextProbeLease, unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
+import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
+import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -125,12 +135,17 @@ export async function prepareAdapterExchange(
     | "transportToken"
     | "oauthDispatch"
     | "imageTierBias"
+    | "oauth401ReplayAttempted"
     | "isOAuth401ReplayProvider"
     | "sentOAuthSnapshot"
     | "refreshResolvedOAuthSelection"
     | "replayOAuthCredentialSnapshot"
     | "invalidateSameTargetRequest"
     | "resolveSelectionAdapter"
+    | "resolveCopilotSelection"
+    | "copilotRefusalResponse"
+    | "anthropicInstance"
+    | "currentAnthropicRouteDecision"
     | "anthropicRouteDecision"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
@@ -145,17 +160,24 @@ export async function prepareAdapterExchange(
   responseEffects: Pick<ResponsesEffects, "cancelResponseCompletion" | "notifyResponseComplete" | "refreshRequestToolAliases">,
   sendBudgetState: Pick<
     ResponsesSendBudget,
+    | "adapterSendBudget"
     | "adapterDispatchBudget"
     | "noteAdapterPhysicalSend"
     | "noteAdapterRecoveryWithheld"
     | "remainingTransientSendBudget"
-    | "noteTransientSends"
+    | "adapterSendBudget"
+    | "transientSendReporter"
     | "recoverySendAllowance"
     | "recoveryClassFor"
     | "sendBudgetExhausted"
     | "reserveCredentialHop"
     | "pendingHopPermit"
     | "workflowRootId"
+    | "claimAmbiguousResend"
+    | "sendsUsed"
+    | "targetSendsUsed"
+    | "initialSendAllowance"
+    | "noteInitialDispatch"
   >,
 ) {
   const { options, config, logCtx, req } = requestContext;
@@ -165,6 +187,10 @@ export async function prepareAdapterExchange(
     refreshResolvedOAuthSelection,
     invalidateSameTargetRequest,
     resolveSelectionAdapter,
+    resolveCopilotSelection,
+    copilotRefusalResponse,
+    anthropicInstance,
+    currentAnthropicRouteDecision,
     anthropicSessionKey,
     commitResolvedOAuthSelection,
     applyFailoverSnapshot,
@@ -180,20 +206,41 @@ export async function prepareAdapterExchange(
   } = requestState;
   const { cancelResponseCompletion, notifyResponseComplete, refreshRequestToolAliases } = responseEffects;
   const {
+    adapterSendBudget,
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
     noteAdapterRecoveryWithheld,
     remainingTransientSendBudget,
-    noteTransientSends,
+    transientSendReporter,
     recoverySendAllowance,
     recoveryClassFor,
     sendBudgetExhausted,
     reserveCredentialHop,
+    claimAmbiguousResend,
   } = sendBudgetState;
 
 
+  let selfContainedJudgment: boolean | undefined;
+  const requestIsSelfContained = (): boolean =>
+    selfContainedJudgment ??= selfContainedResponsesBody(parsed._rawBody);
+  const claimPreHeaderResend = (): boolean => authorizeResendForRecovery(
+    "pre-header", "connection-reset",
+    ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend),
+  ).allowed;
+
   const upstream = new AbortController();
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
+  /** Contain replacement negotiation before adapter admission and release its upstream abort link. */
+  const resolveRotatedCopilotSelection = async (): Promise<Response | undefined> => {
+    try { await resolveCopilotSelection(parsed); }
+    catch (error) {
+      cleanupUpstreamAbort();
+      upstream.abort();
+      if ((options.abortSignal ?? req.signal).aborted) return clientCancelledResponse();
+      return copilotRefusalResponse(error)
+        ?? formatErrorResponse(502, "upstream_error", "GitHub Copilot Auto negotiation failed.");
+    }
+  };
   const connectMs = config.connectTimeoutMs ?? 200_000;
   // Bridge stall budget (seconds of silence before upstream_stall_timeout); the retry backoff
   // heartbeat interval is derived from it so the watchdog is always fed during deliberate waits.
@@ -310,10 +357,17 @@ export async function prepareAdapterExchange(
    * is invisible to it and a missed bump would replay a request built with a stale key.
    */
 
+  const initialRecovery = route.providerName === "github-copilot"
+    ? sendBudgetState.pendingHopPermit?.sendClass === "auth-recovery" ? "oauth-account-429"
+      : transportState.oauth401ReplayAttempted ? "oauth-401" : undefined
+    : undefined;
   let upstreamResponse: Response;
+  let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
-      transportState.noteRoutedAttemptSend(inputTokenEstimate);
+      transportState.noteRoutedAttemptSend(inputTokenEstimate, initialRecovery);
+      const producer = adapterDispatchBudget?.beginSpendProducer?.();
+      try {
       upstreamResponse = await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot =>
         transportState.activeAdapter.fetchResponse!(builtInitialRequest, {
           kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
@@ -329,8 +383,11 @@ export async function prepareAdapterExchange(
             dispatchOverride: oauthDispatch(builtInitialRequest),
             providerName: route.providerName,
             modelId: route.modelId,
+            beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+              ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
           }),
         }));
+      } finally { producer?.close(); }
     } else {
       // #1851 scope guard: transient-5xx retry on this generic adapter path is opt-in for
       // direct Google AI Studio only (Vertex/Antigravity use fetchResponse above). Other
@@ -340,19 +397,56 @@ export async function prepareAdapterExchange(
       // legacy direct-Google exception is preserved exactly; every other adapter still keeps
       // reset-only semantics so combo failover hops on the first 5xx.
       const transientPolicy = transientRetryPolicyFor(route.provider);
-      const compactPrepaid = options.compactionRecoveryAttempted ? sendBudgetState.pendingHopPermit : undefined;
+      const resetPolicy = resetReplayPolicyFor(route.provider);
+      // Rebook a native Copilot hop against the negotiated destination before dispatch.
+      // Raw externally counted permits settle through the retry helper's send reporter.
+      if (route.providerName === "github-copilot" && adapterSendBudget && sendBudgetState.pendingHopPermit
+        && sendBudgetState.pendingHopPermit.sendClass === "auth-recovery") {
+        const original = sendBudgetState.pendingHopPermit;
+        sendBudgetState.pendingHopPermit = undefined;
+        original.release();
+        const decision = adapterSendBudget.reserveDispatch({
+          sendClass: original.sendClass,
+          targetKey: `${route.providerName}|${builtInitialRequest.url}|${route.modelId}`,
+          countedExternally: true,
+        });
+        if (!decision.allowed) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+        handoffPermit = decision.permit;
+      }
+      const compactPrepaid = handoffPermit ?? (options.compactionRecoveryAttempted ? sendBudgetState.pendingHopPermit : undefined);
       if (compactPrepaid) sendBudgetState.pendingHopPermit = undefined;
       let compactPrepaidUsed = false;
+      // A combo-owned or compaction-prepaid send is settled by the physical-dispatch receipt
+      // when spend enforcement is off. Enforced spend and direct requests keep the shared
+      // physical-send reporter, which already owns the permit lifecycle there.
+      // Stable per request: a Combo or compaction permit comes from `reserveDispatch`, which starts
+      // (and freezes) the spend policy first, so `spendEnforced` cannot change before dispatch.
+      const receiptMode = !sendBudgetState.adapterSendBudget?.spendEnforced
+        && Boolean(options.comboInitialSend || compactPrepaid);
+      // Combo and emergency compaction admission already book this target's first send.
+      // Its configured initial ceiling is target-local; the shared remainder below still
+      // accounts for earlier targets without deducting their sends from this target twice.
+      const initialSendCap = transientPolicy || resetPolicy
+        || (options.comboAttempt && route.provider.adapter === "google")
+        ? transientSendCapFor(transientPolicy?.attempts,
+          (options.comboAttempt || compactPrepaid) ? 0 : sendBudgetState.sendsUsed)
+        : 1;
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
-      upstreamResponse = await fetchWithRetryPolicy(
+      try { upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
-          if (compactPrepaid && !compactPrepaidUsed) {
+          // Unconfigured generic sends may omit the counting reporter. Capture policy
+          // independently so a later recovery still belongs to this request's start.
+          sendBudgetState.adapterSendBudget?.startRequest?.({
+            poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
+          });
+          // Receipt mode books the physical send at executor admission instead of here.
+          if (!receiptMode && compactPrepaid && !compactPrepaidUsed) {
             if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
             compactPrepaidUsed = true;
           }
-          transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery);
+          transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
           return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
             method: builtInitialRequest.method,
             headers: builtInitialRequest.headers,
@@ -362,31 +456,58 @@ export async function prepareAdapterExchange(
               dispatchOverride: oauthDispatch(builtInitialRequest),
               providerName: route.providerName,
               modelId: route.modelId,
+              onPhysicalDispatch: () => {
+                // Preserve the unconfigured direct-adapter accounting contract; Combo admission
+                // and explicit retry/compaction budgets require a receipt for their booked send.
+                if (receiptMode) {
+                  sendBudgetState.noteInitialDispatch(compactPrepaid && !compactPrepaidUsed ? compactPrepaid : undefined);
+                  compactPrepaidUsed = true;
+                }
+              },
+              beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+                ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
             }));
         },
         {
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
-          ...(transientPolicy || compactPrepaid
-            // Draws the remainder, not the raw policy. A combo child inherits the parent's
-            // holder but used to take a fresh full allowance on its own first send, so the
-            // shared counter was inherited without ever being read as a limit.
+          claimAmbiguousResend: claimPreHeaderResend,
+          ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
             ? {
-              // The first emergency send is already paid for. Only retries consume the
-              // remaining allowance; treating the booking as unavailable blocks a cap of two.
-              attempts: Math.min(transientPolicy?.attempts ?? 1,
-                remainingTransientSendBudget(transientPolicy?.attempts ?? 1) + (compactPrepaid ? 1 : 0)),
-              onSendsConsumed: noteTransientSends,
+              // A pending compaction permit already booked this leg's first physical send.
+              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
+                ? {
+                  attempts: Math.min(initialSendCap,
+                    sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
+                }
+                : {}),
+              // Reporter path: direct requests and enforced spend. Receipt-mode sends are
+              // settled by `onPhysicalDispatch`, so a reporter here would count them twice.
+              ...(receiptMode
+                ? {}
+                : { onSendsConsumed: transientSendReporter(compactPrepaid ?? options.comboDispatchPermit) }),
             }
             : {}),
         },
-      );
+      ); } finally { compactPrepaid?.release(); }
     }
   } catch (err) {
     cleanupUpstreamAbort();
     upstream.abort();
     if (options.abortSignal?.aborted) return clientCancelledResponse();
+    const storageRefusal = spendLedgerStorageErrorResponse(err, logCtx);
+    if (storageRefusal) {
+      releaseCodexAuthContextProbeLease(admissionState.authCtx);
+      return storageRefusal;
+    }
     const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
+    const codexRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
+      now: Date.now(), accountSelector: route.codexAccountNamespace,
+    });
+    if (codexRefusal) {
+      releaseCodexAuthContextProbeLease(admissionState.authCtx);
+      return codexRefusal;
+    }
     // A pause committed during pacing is local admission policy, not a failed upstream.
     if (refusal instanceof OAuthAccountPausedError) {
       return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
@@ -403,11 +524,13 @@ export async function prepareAdapterExchange(
     // blaming the provider makes the caller send the whole turn again -- the amplification this
     // budget exists to stop. The passthrough path has answered 429 here since #4546.
     if (err instanceof SendBudgetExhaustedError) {
-      return formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message);
+      return unboundPoolSpendRefusalResponse(logCtx)
+        ?? formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message);
     }
     const msg = describeUpstreamConnectFailure(err, connectMs);
     return formatErrorResponse(502, "upstream_error", msg);
   } finally {
+    handoffPermit?.release();
     builtInitialRequest.releaseBodyObservation?.();
   }
 
@@ -431,7 +554,7 @@ export async function prepareAdapterExchange(
     // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
     // moments later; at most one byte-identical replay is allowed per request.
     const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
-    let oauth401ReplayAttempted = false;
+    let oauth401ReplayAttempted = transportState.oauth401ReplayAttempted;
     let antigravityAuthRotationAttempted = false;
     // At most one reasoning-effort downgrade per request. This sits outside the recovery loop
     // below for the same reason the two guards above do: a guard declared inside it is reset by
@@ -507,6 +630,8 @@ export async function prepareAdapterExchange(
         try {
           if (transportState.activeAdapter.fetchResponse) {
             transportState.noteRoutedAttemptSend(retryEstimate, recovery);
+            const producer = adapterDispatchBudget?.beginSpendProducer?.();
+            try {
             return await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot => {
               // The dispatch boundary is HERE, not before the pacing wait: that wait can reject for
               // an abort, a saturated queue, an expired slot or a removed provider, and none of
@@ -531,9 +656,12 @@ export async function prepareAdapterExchange(
                   dispatchOverride: oauthDispatch(retryRequest),
                   providerName: route.providerName,
                   modelId: route.modelId,
+                  beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+                    ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
                 }),
               });
             });
+            } finally { producer?.close(); }
           }
           // #2643 review: this leg used to call fetchWithHeaderTimeout directly, so an
           // opted-in provider's transient-5xx policy applied to the initial send and to
@@ -545,19 +673,28 @@ export async function prepareAdapterExchange(
           const refetchWithPolicy = (route.provider.adapter === "google" || refetchTransientPolicy)
             ? fetchWithTransientRetry
             : fetchWithResetRetry;
-          // Same rule as the passthrough rebuild: spend the base allowance first, then the one
-          // shared final-recovery reserve, so a recovery that follows a spent streak still gets
-          // its single send instead of dying at three.
-          const refetchAllowance = refetchTransientPolicy
-            ? recoverySendAllowance(
-              refetchTransientPolicy.attempts,
-              recoveryClassFor(recovery),
+          const helperCountsSends = sendBudgetState.adapterSendBudget?.spendEnforced === true || refetchTransientPolicy !== null || resetReplayPolicyFor(route.provider) !== null;
+          const prepaid = sendBudgetState.pendingHopPermit;
+          const configuredTotal = refetchTransientPolicy?.attempts;
+          const refetchCap = transientSendCapFor(configuredTotal, sendBudgetState.targetSendsUsed);
+          // An exact total includes a booked hop, even when it consumed the last base slot.
+          // Keep that funded send while forbidding the final reserve from widening the total.
+          const prepaidLastSlot = helperCountsSends && configuredTotal !== undefined && prepaid
+            && refetchCap > 0 && remainingTransientSendBudget(refetchCap) === 0;
+          if (prepaidLastSlot) sendBudgetState.pendingHopPermit = undefined;
+          const refetchAllowance = helperCountsSends
+            ? prepaidLastSlot ? { attempts: 1, permit: prepaid } : recoverySendAllowance(
+              refetchCap, recoveryClassFor(recovery),
               `${route.providerName}|${route.modelId}|${recovery}`,
+              { allowFinalRecoveryReserve: configuredTotal === undefined },
             )
             : undefined;
           try {
             return await refetchWithPolicy(
               recoveryKind => {
+                sendBudgetState.adapterSendBudget?.startRequest?.({
+                  poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
+                });
                 if (refetchAllowance?.permit && !refetchAllowance.permit.use()) {
                   throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
                 }
@@ -566,7 +703,7 @@ export async function prepareAdapterExchange(
                 // can be refused above before it does. use() past the first attempt is a no-op.
                 onDispatch?.();
                 if (preserveFailureResponse) replacementAdmitted = true;
-                if (!refetchTransientPolicy) chargeFastDowngradeWorkflowSend();
+                if (!refetchAllowance) chargeFastDowngradeWorkflowSend();
                 return fetchWithHeaderTimeout(retryRequest.url,
                   applyUpstreamRecoveryInit({
                     method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
@@ -575,15 +712,18 @@ export async function prepareAdapterExchange(
                     dispatchOverride: oauthDispatch(retryRequest),
                     providerName: route.providerName,
                     modelId: route.modelId,
+                    beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+                      ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
                   }));
               },
               {
                 abortSignal: upstream.signal,
                 label: safeHostLabel(retryRequest.url),
+                claimAmbiguousResend: claimPreHeaderResend,
                 ...(refetchAllowance
                   ? {
                     attempts: refetchAllowance.attempts,
-                    onSendsConsumed: noteTransientSends,
+                    onSendsConsumed: transientSendReporter(refetchAllowance.permit),
                   }
                   : {}),
               },
@@ -597,6 +737,22 @@ export async function prepareAdapterExchange(
           retryRequest.releaseBodyObservation?.();
         }
       } catch (err) {
+        const storageRefusal = !options.abortSignal?.aborted && spendLedgerStorageErrorResponse(err, logCtx);
+        if (storageRefusal) {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          releaseCodexAuthContextProbeLease(admissionState.authCtx);
+          return { failed: storageRefusal };
+        }
+        const codexRefusal = !options.abortSignal?.aborted && mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
+          now: Date.now(), accountSelector: route.codexAccountNamespace,
+        });
+        if (codexRefusal) {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          releaseCodexAuthContextProbeLease(admissionState.authCtx);
+          return { failed: codexRefusal };
+        }
         if (preserveFailureResponse && !replacementAdmitted && !options.abortSignal?.aborted)
           return { failed: preserveFailureResponse };
         cleanupUpstreamAbort();
@@ -618,7 +774,8 @@ export async function prepareAdapterExchange(
         // Same rule on the recovery leg: the ladder refused to send again, so the answer names
         // this proxy rather than the provider it never reached.
         if (err instanceof SendBudgetExhaustedError) {
-          return { failed: formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message) };
+          return { failed: unboundPoolSpendRefusalResponse(logCtx)
+            ?? formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, err.message) };
         }
         const msg = describeUpstreamConnectFailure(err, connectMs);
         return { failed: formatErrorResponse(502, "upstream_error", msg) };
@@ -638,7 +795,7 @@ export async function prepareAdapterExchange(
       const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
       const hop = reserveCredentialHop("auth-recovery",
         `${route.providerName}|${route.modelId}|antigravity-auth`,
-        !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null);
+        !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null));
       if (!hop.allowed) return null;
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextId);
@@ -677,8 +834,9 @@ export async function prepareAdapterExchange(
       // Preserve the terminal verdict through adapter and combo error formatting.
       // This also covers a reset reached by a 401/429/413 recovery refetch.
       if (isNonReplayableResponse(upstreamResponse)) {
-        cleanupUpstreamAbort();
-        return upstreamResponse;
+        try {
+          return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
+        } finally { cleanupUpstreamAbort(); }
       }
      if (
        upstreamResponse.status === 401
@@ -687,7 +845,7 @@ export async function prepareAdapterExchange(
         && !oauth401ReplayAttempted
         && !sendBudgetExhausted()
       ) {
-        oauth401ReplayAttempted = true;
+        oauth401ReplayAttempted = transportState.oauth401ReplayAttempted = true;
         let refreshed: OAuthAccessSnapshot;
         try {
           refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
@@ -708,7 +866,7 @@ export async function prepareAdapterExchange(
               const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
               const hop = reserveCredentialHop("auth-recovery",
                 `${route.providerName}|${route.modelId}|terminal-refresh-account`,
-                !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null);
+                !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null));
               if (hop.allowed) {
                 try {
                   const admitted = await applyFailoverSnapshot(alternate);
@@ -758,7 +916,7 @@ export async function prepareAdapterExchange(
         if (route.providerName === "kiro") {
           parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
         }
-        const refreshedProvider = resolveProviderTransport(
+        let refreshedProvider = resolveProviderTransport(
           route.providerName,
           {
             ...route.provider,
@@ -771,6 +929,9 @@ export async function prepareAdapterExchange(
             : undefined,
         );
         route.provider = refreshedProvider;
+        const copilotRefusal = await resolveRotatedCopilotSelection();
+        if (copilotRefusal) return copilotRefusal;
+        refreshedProvider = route.provider;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire, route.staticPolicy),
@@ -823,6 +984,8 @@ export async function prepareAdapterExchange(
         // until runtime cleanup (one per rotated key).
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         route.provider = rotated;
+        const selectionFailure = await resolveRotatedCopilotSelection();
+        if (selectionFailure) return selectionFailure;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -861,7 +1024,7 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "repair",
           `${route.providerName}|${route.modelId}|anthropic-fast-downgrade`,
-          !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
+          !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null),
         );
         if (hop.allowed) {
           anthropicFastDowngradeGuard.attempted = true;
@@ -969,6 +1132,8 @@ export async function prepareAdapterExchange(
         // until runtime cleanup (one per rotated key under a rate-limit storm).
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         route.provider = rotated;
+        const selectionFailure = await resolveRotatedCopilotSelection();
+        if (selectionFailure) return selectionFailure;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -991,31 +1156,32 @@ export async function prepareAdapterExchange(
       // Anthropic OAuth: recover a rate limit or proven account entitlement refusal
       // before output, within the shared request and account rotation limits.
       while (
-        (upstreamResponse.status === 429 || upstreamResponse.status === 403)
+        (upstreamResponse.status === 429 || upstreamResponse.status === 403 || upstreamResponse.status === 401)
+        && anthropicInstance
         && transportState.anthropicPoolAccountId
       ) {
-        const nextAccountId = await rotateAnthropicAccountOnResponse(upstreamResponse, {
+        const nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance, upstreamResponse, {
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: upstream.signal,
+          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: upstream.signal,
           canRetry: !sendBudgetExhausted() && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
         });
         if (!nextAccountId) break;
         try {
-          const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
+          const admitted = await commitResolvedOAuthSelection(await anthropicRoutingFor(anthropicInstance).getAnthropicPoolAccessSnapshot(nextAccountId));
           if (!admitted) throw new Error("OAuth selection changed during recovery");
           try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
           transportState.anthropicPoolAccountId = admitted.accountId;
           transportState.anthropicPoolFailovers += 1;
           route.provider = { ...route.provider, apiKey: admitted.accessToken };
           invalidateSameTargetRequest();
-          logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
+          logCtx.provider = formatAnthropicProviderForLog(anthropicInstance, admitted.accountId, config);
           transportState.activeAdapter = resolveSelectionAdapter(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
             config.cacheRetention,
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-         const result = await rebuildAndRefetch("anthropic-oauth-429");
+         const result = await rebuildAndRefetch(upstreamResponse.status === 401 ? "oauth-401" : "anthropic-oauth-429");
          if ("failed" in result) return result.failed;
          upstreamResponse = result;
           if (isNonReplayableResponse(upstreamResponse)) continue recovery;
@@ -1059,10 +1225,9 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
-          // Only a helper-routed replay reports this send back. A reset-only refetch reports
-          // nothing and an adapter ladder settles the booking itself, so promising an external
-          // report on either would leave a booking pending until it swallowed a later charge.
-          !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
+          // Transient and opted-in reset helpers report physical sends; an adapter-owned
+          // ladder settles its own booking.
+          !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null),
         );
         if (!hop.allowed) break;
         const nextAccountId = rotateGenericOAuthAccountOnRefusal(
@@ -1164,10 +1329,9 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
-          // Only a helper-routed replay reports this send back. A reset-only refetch reports
-          // nothing and an adapter ladder settles the booking itself, so promising an external
-          // report on either would leave a booking pending until it swallowed a later charge.
-          !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
+          // Transient and opted-in reset helpers report physical sends; an adapter-owned
+          // ladder settles its own booking.
+          !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null),
         );
         if (!hop.allowed) break;
         const nextAccountId = rotateGenericOAuthAccountOn429(
@@ -1276,7 +1440,7 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|adapter-recovery-oauth-verify`,
-          !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
+          !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null),
         );
         if (!hop.allowed) break;
         // Auth-refusal rotation, not the rate-limit one: a verification refusal

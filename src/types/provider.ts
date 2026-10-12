@@ -1,4 +1,5 @@
 import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } from "./wire";
+import type { AnthropicAccountPoolConfig } from "./anthropic-account-pool";
 
 /**
  * Per-provider proactive-refresh policy. The guardian only ever touches a provider whose EFFECTIVE
@@ -68,15 +69,15 @@ export interface TransientRetryPolicy {
 }
 
 /**
- * Opt-in replacement of a native Responses send whose upstream connection closed while the
+ * Opt-in replacement of a Responses send whose upstream connection closed while the
  * caller had observed nothing (`providers.<name>.retryOnReset`).
  *
- * Covers both ambiguous stages the proxy can be in: no response head at all, and a head whose
- * SSE body carried only control events. Disabled unless the object is present; a bare `{}`
- * opts in with defaults. Only a request the proxy can judge self-contained is ever replaced;
- * see `src/server/responses/reset-replay.ts`. The replacement inference may still be billed if
- * the origin had already started the first one, which is what makes this opt-in rather than
- * default.
+ * Native Responses covers pre-header resets and post-header SSE carrying only control events.
+ * Generic translated dispatch covers initial and rebuilt pre-header sends, sharing the same
+ * grant and send budget; adapter-owned transports and translated post-header failures are excluded.
+ * Disabled unless present; `{}` opts in. Only self-contained requests qualify (see
+ * `src/server/responses/reset-replay.ts`). Replacement inference may still be billed if the
+ * origin had already started the first one, so this is opt-in rather than default.
  */
 export interface ResetReplayPolicy {
   /** Master switch. Presence of the object also enables the policy (default true). */
@@ -274,6 +275,10 @@ export interface ModelCapabilities {
 }
 
 export interface OcxProviderConfig {
+  /** Explicit builtin Pool 2 provenance; endpoints never imply ownership. */
+  anthropicOAuthInstance?: "anthropic2";
+  /** Independent Anthropic pool settings; valid only on providers.anthropic2. */
+  anthropicAccountPool?: AnthropicAccountPoolConfig;
   /** Optional browser-compatible outbound TLS profile; disabled by default. */
   tlsProfile?: "antigravity-browser";
   /** Optional short provider namespace used only at request/catalog presentation time. */
@@ -1012,9 +1017,9 @@ export interface OcxProviderConfig {
    */
   transientRetryOn5xx?: TransientRetryPolicy;
   /**
-   * Opt-in replacement of a native Responses send that died while the caller had observed
-   * nothing (`providers.<name>.retryOnReset`). Disabled unless present; a bare `{}` opts in
-   * with defaults. Native Responses sends only, and only for self-contained requests.
+   * Opt-in replacement of self-contained Responses sends (`providers.<name>.retryOnReset`).
+   * Disabled unless present; `{}` opts in. Native sends and generic translated initial/rebuilt
+   * pre-header sends share the grant/budget; adapter-owned and translated post-header failures are excluded.
    */
   retryOnReset?: ResetReplayPolicy;
   /**

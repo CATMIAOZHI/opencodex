@@ -1,5 +1,6 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import * as z from "zod/v4";
+import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import {
@@ -74,6 +75,18 @@ import { parseDesktopProfile } from "../../claude/desktop-profile";
 import { isInterceptBindingId, isInterceptBindingRoute } from "../../claude/intercept/model-bindings";
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES, MAX_APP_OWNED_MEMORY_BUDGET_MB, MIN_APP_OWNED_MEMORY_BUDGET_MB } from "../../lib/app-owned-memory";
 
+/** Strict write contract; file-load recovery is applied only by the enclosing schema. */
+export const protocolConfigSchema = z.object({
+  unrepresentable: z.enum(["legacy", "reject"]).optional(),
+  rollout: z.object({
+    nativeChatCombos: z.boolean().optional(),
+    managedMessagesNative: z.boolean().optional(),
+    managedMessagesNativeOAuth: z.boolean().optional(),
+    directEncoders: z.boolean().optional(),
+    shadowPlan: z.boolean().optional(),
+  }).strict().optional(),
+}).strict();
+
 export const configSchema = z.object({
   chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   codexNativeSteering: z.boolean().optional().catch(false),
@@ -96,18 +109,23 @@ export const configSchema = z.object({
   // which can reopen a surface the operator meant to close. src/protocols/settings.ts parses it
   // and fails closed instead.
   apiSurfaces: z.unknown().optional(),
-  // Every protocol default is the conservative one (legacy policy, rollout off), so a malformed
-  // block dropping to undefined cannot widen behavior.
-  protocols: z.object({
-    unrepresentable: z.enum(["legacy", "reject"]).optional(),
-    rollout: z.object({
-      nativeChatCombos: z.boolean().optional(),
-      managedMessagesNative: z.boolean().optional(),
-      managedMessagesNativeOAuth: z.boolean().optional(),
-      directEncoders: z.boolean().optional(),
-      shadowPlan: z.boolean().optional(),
-    }).strict().optional(),
-  }).strict().optional().catch(undefined),
+  // Keep malformed native policy disabled even when an enabled pool supplies defaults.
+  protocols: protocolConfigSchema.optional().catch(ctx => {
+    const raw = ctx.input;
+    const protocols = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const rollout = protocols.rollout;
+    const fields = rollout && typeof rollout === "object" && !Array.isArray(rollout) ? rollout as Record<string, unknown> : {};
+    return {
+      unrepresentable: protocols.unrepresentable === "reject" ? "reject" as const : "legacy" as const,
+      rollout: {
+        nativeChatCombos: fields.nativeChatCombos === true,
+        managedMessagesNative: false,
+        managedMessagesNativeOAuth: false,
+        directEncoders: fields.directEncoders === true,
+        shadowPlan: fields.shadowPlan === true,
+      },
+    };
+  }),
   // A malformed present client block must remain diagnosable from raw config and
   // fail closed through src/client/state.ts; unrelated provider state still loads.
   client: clientConnectionSchema.optional().catch(undefined),
@@ -281,6 +299,10 @@ export const configSchema = z.object({
   codexAccountAutoSwitchThresholds: z.unknown().optional().transform(salvageCodexAccountAutoSwitchThresholds),
   // An invalid optional preference must not discard providers or credential rows.
   codexAccountPriorityFailback: z.boolean().optional().catch(false),
+  // Absent or invalid keeps the sliding window on. Explicit false restores consecutive-only steering.
+  codexFailureWindow: z.boolean().optional().catch(undefined),
+  codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),
+  codexWsReuseAcrossTurns: z.boolean().optional().catch(false),
   activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.
@@ -308,8 +330,9 @@ export const configSchema = z.object({
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
   blockedModelRedirects: blockedModelRedirectsSchema.optional().catch(undefined),
-  // Preserve malformed hand edits for a local routing error; candidate writes use the shared parser.
-  anthropicAccountPool: z.unknown().optional(),
+  // Degrade malformed hand edits locally; candidate writes reject them before parsing.
+  // An invalid native preference retains the legacy route instead of enabling native by default.
+  anthropicAccountPool: anthropicAccountPoolSchema,
   // Same degrade-don't-reject rationale as the fields above: a hand-edited
   // non-string must not trip the backup-and-defaults repair path. Unset then
   // takes the canonical sideband path (src/server/live.ts normalizeSidebandRoot).
@@ -332,6 +355,11 @@ export const configSchema = z.object({
       .map(row => apiKeyEntrySchema.parse(row) as OcxApiKeyEntry);
   }),
 }).passthrough().superRefine((config, ctx) => {
+  // Helper `anthropicInstance` is deliberately not refined here. A document-level issue would send
+  // loadConfig through salvage (which refuses pathless issues) to the backup-and-defaults path, so
+  // one hand-edited helper preference would hide every provider. Writes reject it explicitly in
+  // validateConfigCandidate, diagnostics report it from the raw file, and loadConfig drops only the
+  // offending key (sanitizeAnthropicSidecarInstanceForLoad).
   const claudeCode = (config as { claudeCode?: unknown }).claudeCode;
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });

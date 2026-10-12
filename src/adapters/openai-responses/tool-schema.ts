@@ -10,56 +10,69 @@ import {
 import { isPlainObject } from "./internal";
 
 function withCompletedRequired(schema: Record<string, unknown>): Record<string, unknown> {
-  let changed = false;
-  const updates: Record<string, unknown> = {};
-  const completeSchema = (value: unknown): unknown =>
-    isPlainObject(value) ? withCompletedRequired(value) : value;
-  const completeSchemaArray = (value: unknown): unknown => {
-    if (!Array.isArray(value)) return value;
-    let arrayChanged = false;
-    const completed = value.map(item => {
-      const next = completeSchema(item);
-      arrayChanged ||= next !== item;
-      return next;
+  let result = schema;
+  // Caller schemas can be much deeper than the JavaScript call stack. Complete
+  // children before parents using heap-backed jobs, retaining unchanged objects.
+  const jobs: Array<() => void> = [];
+  const schedule = (source: Record<string, unknown>, done: (completed: Record<string, unknown>) => void): void => {
+    jobs.push(() => {
+      let completed = source;
+      const set = (key: string, value: unknown): void => {
+        if (value !== source[key]) completed = { ...completed, [key]: value };
+      };
+      jobs.push(() => {
+        if (isPlainObject(completed.properties)) {
+          const originalRequired = completed.required;
+          const required = Array.isArray(originalRequired)
+            ? originalRequired.filter((name): name is string => typeof name === "string") : [];
+          const names = new Set(required);
+          const missing = Object.keys(completed.properties).filter(name => !names.has(name));
+          if (!Array.isArray(originalRequired) || required.length !== originalRequired.length || missing.length > 0) {
+            completed = { ...completed, required: [...required, ...missing] };
+          }
+        }
+        done(completed);
+      });
+      const completeArray = (key: string, value: unknown[]): void => {
+        let array = value;
+        value.forEach((child, index) => {
+          if (!isPlainObject(child)) return;
+          schedule(child, next => {
+            if (next === child) return;
+            if (array === value) array = [...value];
+            array[index] = next;
+            set(key, array);
+          });
+        });
+      };
+      for (const key of ["properties", "patternProperties", "dependentSchemas", "dependencies", "$defs", "definitions"]) {
+        const value = source[key];
+        if (!isPlainObject(value)) continue;
+        let map = value;
+        for (const [name, child] of Object.entries(value)) {
+          if (!isPlainObject(child)) continue;
+          schedule(child, next => {
+            if (next === child) return;
+            if (map === value) map = { ...value };
+            Object.defineProperty(map, name, { value: next, writable: true, enumerable: true, configurable: true });
+            set(key, map);
+          });
+        }
+      }
+      for (const key of ["allOf", "anyOf", "oneOf", "prefixItems"]) {
+        const value = source[key];
+        if (Array.isArray(value)) completeArray(key, value);
+      }
+      for (const key of ["additionalProperties", "additionalItems", "unevaluatedProperties", "unevaluatedItems", "propertyNames", "contains", "not", "if", "then", "else", "items", "contentSchema"]) {
+        const value = source[key];
+        if (Array.isArray(value)) completeArray(key, value);
+        else if (isPlainObject(value)) schedule(value, next => set(key, next));
+      }
     });
-    return arrayChanged ? completed : value;
   };
-  const completeSchemaMap = (value: unknown): unknown => {
-    if (!isPlainObject(value)) return value;
-    let mapChanged = false;
-    const completed = Object.fromEntries(Object.entries(value).map(([key, child]) => {
-      const next = completeSchema(child);
-      mapChanged ||= next !== child;
-      return [key, next];
-    }));
-    return mapChanged ? completed : value;
-  };
-  const setCompleted = (key: string, completed: unknown): void => {
-    if (completed === schema[key]) return;
-    updates[key] = completed;
-    changed = true;
-  };
-  for (const key of ["properties", "patternProperties", "dependentSchemas", "dependencies", "$defs", "definitions"]) {
-    setCompleted(key, completeSchemaMap(schema[key]));
-  }
-  for (const key of ["allOf", "anyOf", "oneOf", "prefixItems"]) {
-    setCompleted(key, completeSchemaArray(schema[key]));
-  }
-  for (const key of ["additionalProperties", "additionalItems", "unevaluatedProperties", "unevaluatedItems", "propertyNames", "contains", "not", "if", "then", "else", "items", "contentSchema"]) {
-    const value = schema[key];
-    setCompleted(key, Array.isArray(value) ? completeSchemaArray(value) : completeSchema(value));
-  }
-  const recursivelyCompleted = changed ? { ...schema, ...updates } : schema;
-  if (!isPlainObject(recursivelyCompleted.properties)) return recursivelyCompleted;
-  const propertyNames = Object.keys(recursivelyCompleted.properties);
-  const originalRequired = recursivelyCompleted.required;
-  const required = Array.isArray(originalRequired)
-    ? originalRequired.filter((name): name is string => typeof name === "string") : [];
-  const missing = propertyNames.filter(name => !required.includes(name));
-  if (Array.isArray(originalRequired) && required.length === originalRequired.length && missing.length === 0) {
-    return changed ? recursivelyCompleted : schema;
-  }
-  return { ...recursivelyCompleted, required: [...required, ...missing] };
+  schedule(schema, completed => { result = completed; });
+  while (jobs.length > 0) jobs.pop()!();
+  return result;
 }
 
 function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean, strictResponsesToolSchemas: boolean): unknown | undefined {
