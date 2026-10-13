@@ -2671,7 +2671,7 @@ export const fr: Record<TKey, string> = {
   "anthropicGrant.badgeErrorAria": "Impossible de lire les réinitialisations de l’utilisation de Claude",
   "anthropicGrant.title": "Réinitialisations de l’utilisation de Claude",
   "anthropicGrant.available": "Ce compte dispose de {count} réinitialisation(s) de l’utilisation.",
-  "anthropicGrant.desc": "Une réinitialisation recharge immédiatement les limites Claude de ce compte sur 5 heures et sur une semaine. Le jour de réinitialisation hebdomadaire reste inchangé.",
+  "anthropicGrant.desc": "Une réinitialisation recharge immédiatement les limites Claude de ce compte. Chaque réinitialisation indique les limites concernées.",
   "anthropicGrant.none": "Ce compte ne dispose d’aucune réinitialisation de l’utilisation.",
   "anthropicGrant.ineligible": "Ce compte ne peut pas bénéficier de réinitialisations de l’utilisation pour le moment.",
   "anthropicGrant.loadFailed": "Impossible de lire les réinitialisations de l’utilisation de ce compte.",

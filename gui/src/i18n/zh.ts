@@ -2152,7 +2152,7 @@ export const zh: Record<TKey, string> = {
   "anthropicGrant.badgeErrorAria": "无法读取 Claude 用量重置次数",
   "anthropicGrant.title": "Claude 用量重置",
   "anthropicGrant.available": "此账号有 {count} 次用量重置机会。",
-  "anthropicGrant.desc": "使用一次重置机会可立即恢复此账号的 Claude 5 小时和每周用量额度。每周额度的重置日期不变。",
+  "anthropicGrant.desc": "使用一次重置机会可立即恢复此账号的 Claude 用量额度。每个重置机会会标明它清空的额度窗口。",
   "anthropicGrant.none": "此账号没有用量重置机会。",
   "anthropicGrant.ineligible": "此账号目前不符合用量重置条件。",
   "anthropicGrant.loadFailed": "无法读取此账号的用量重置机会。",

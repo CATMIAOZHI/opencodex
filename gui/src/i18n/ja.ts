@@ -2571,7 +2571,7 @@ export const ja: Record<TKey, string> = {
   "anthropicGrant.badgeErrorAria": "Claude の使用量リセットを読み取れませんでした",
   "anthropicGrant.title": "Claude の使用量リセット",
   "anthropicGrant.available": "このアカウントには使用量リセットが {count} 回分あります。",
-  "anthropicGrant.desc": "リセットすると、このアカウントの Claude の 5 時間枠と週次枠がすぐに補充されます。週次枠のリセット曜日は変わりません。",
+  "anthropicGrant.desc": "リセットすると、このアカウントの Claude 使用量枠がすぐに補充されます。どの枠が補充されるかは各リセットに表示されます。",
   "anthropicGrant.none": "このアカウントには使用量リセットがありません。",
   "anthropicGrant.ineligible": "このアカウントは現在、使用量リセットの対象ではありません。",
   "anthropicGrant.loadFailed": "このアカウントの使用量リセットを読み取れませんでした。",

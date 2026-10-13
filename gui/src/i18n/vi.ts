@@ -2690,7 +2690,7 @@ export const vi: Record<TKey, string> = {
   "anthropicGrant.badgeErrorAria": "Không thể đọc các lần đặt lại mức sử dụng Claude",
   "anthropicGrant.title": "Đặt lại mức sử dụng Claude",
   "anthropicGrant.available": "Tài khoản này có {count} lần đặt lại mức sử dụng.",
-  "anthropicGrant.desc": "Một lần đặt lại sẽ khôi phục ngay giới hạn sử dụng Claude trong 5 giờ và hàng tuần của tài khoản này. Ngày đặt lại hàng tuần vẫn giữ nguyên.",
+  "anthropicGrant.desc": "Một lần đặt lại sẽ khôi phục ngay giới hạn sử dụng Claude của tài khoản này. Mỗi lần đặt lại đều hiển thị các giới hạn mà nó khôi phục.",
   "anthropicGrant.none": "Tài khoản này không có lần đặt lại mức sử dụng nào.",
   "anthropicGrant.ineligible": "Tài khoản này hiện không đủ điều kiện để đặt lại mức sử dụng.",
   "anthropicGrant.loadFailed": "Không thể đọc các lần đặt lại mức sử dụng của tài khoản này.",

@@ -2715,7 +2715,7 @@ export const pt: Record<TKey, string> = {
   "anthropicGrant.badgeErrorAria": "Não foi possível ler os resets de uso do Claude",
   "anthropicGrant.title": "Resets de uso do Claude",
   "anthropicGrant.available": "Esta conta tem {count} reset(s) de uso.",
-  "anthropicGrant.desc": "Um reset recompõe imediatamente os limites de 5 horas e semanais do Claude desta conta. O dia do reset semanal permanece o mesmo.",
+  "anthropicGrant.desc": "Um reset recompõe imediatamente os limites de uso do Claude desta conta. Cada reset mostra quais limites ele recompõe.",
   "anthropicGrant.none": "Esta conta não tem resets de uso.",
   "anthropicGrant.ineligible": "Esta conta não é elegível para resets de uso no momento.",
   "anthropicGrant.loadFailed": "Não foi possível ler os resets de uso desta conta.",

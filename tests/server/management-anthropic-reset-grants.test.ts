@@ -38,7 +38,9 @@ function grantBlock(overrides: Record<string, unknown> = {}) {
 interface Upstream {
   claims: Array<{ url: string; body: Record<string, unknown> }>;
   reads: number;
+  juniperReads: number;
   status: () => Response;
+  juniper: () => Response;
   claim: () => Response | Promise<Response>;
 }
 
@@ -46,13 +48,21 @@ function upstream(): Upstream & { fetchFn: typeof globalThis.fetch } {
   const state: Upstream = {
     claims: [],
     reads: 0,
+    juniperReads: 0,
     status: () => Response.json({ cedar_ember: grantBlock() }),
+    // The default juniper answer is "upstream did not evaluate the program", which
+    // leaves the cedar status untouched. A test that wants an offer sets its own.
+    juniper: () => Response.json({ juniper_tide: null }),
     claim: () => Response.json({ result: "reset", resets_left: 0, cleared: ["five_hour", "seven_day"] }),
   };
   const fetchFn = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     if (url.endsWith("/api/oauth/profile")) {
       return Response.json({ account: { email: EMAIL }, organization: { uuid: ORG, name: "Org of " + EMAIL } });
+    }
+    if (url.includes("at_wall=1")) {
+      state.juniperReads += 1;
+      return state.juniper();
     }
     if (url.includes("/api/oauth/usage")) {
       state.reads += 1;
@@ -331,5 +341,118 @@ describe("default dependencies (no injected route deps)", () => {
       globalThis.fetch = originalFetch;
       home.remove();
     }
+  });
+});
+
+describe("juniper_tide session reset over the routes", () => {
+  const JUNIPER = "juniper_tide";
+  const juniperBlock = (overrides: Record<string, unknown> = {}) => ({
+    eligible: true,
+    ineligible_reason: null,
+    in_experiment: true,
+    arm: "reset",
+    available: true,
+    next_available_at: null,
+    weekly_resets_at: "2026-10-17T09:00:00+00:00",
+    resets_per_week: 1,
+    event_props: { arm: "reset" },
+    ...overrides,
+  });
+  const atWall = (block: unknown, utilization = 100) => ({
+    five_hour: { utilization, resets_at: "2026-10-13T11:50:00+08:00" },
+    seven_day: { utilization: 44, resets_at: "2026-10-17T17:00:00+08:00" },
+    cedar_ember: null,
+    juniper_tide: block,
+  });
+  /** Cedar that has nothing to spend, so the read is worth the second probe. */
+  const barrenCedar = () => Response.json({
+    cedar_ember: grantBlock({ eligible: false, ineligible_reason: "tenure", at_limit: false, grants: [] }),
+  });
+
+  test("cedar with something to spend keeps its single read and is not merged", async () => {
+    const up = upstream();
+    const { status, json } = await call("GET", "/api/anthropic/reset-grants", deps(up));
+    expect(status).toBe(200);
+    expect(json.grants.map((grant: { id: string }) => grant.id)).toEqual([GRANT]);
+    expect(up.reads).toBe(1);
+    expect(up.juniperReads).toBe(0);
+  });
+
+  test("a juniper offer is appended when cedar has nothing, and atLimit stays cedar's", async () => {
+    const up = upstream();
+    up.status = barrenCedar;
+    up.juniper = () => Response.json(atWall(juniperBlock()));
+    const { status, json } = await call("GET", "/api/anthropic/reset-grants", deps(up));
+    expect(status).toBe(200);
+    expect(up.reads).toBe(1);
+    expect(up.juniperReads).toBe(1);
+    expect(json.eligible).toBe(true);
+    expect(json.grants.map((grant: { id: string }) => grant.id)).toEqual([JUNIPER]);
+    expect(json.grants[0]).toMatchObject({
+      id: JUNIPER, resetsTotal: 1, resetsLeft: 1, clears: ["five_hour"],
+      paused: false, usableNow: true, useRequiresLimit: false, percentUsed: { five_hour: 100 },
+    });
+    // `atLimit` gates EVERY grant, cedar included: juniper must not widen it.
+    expect(json.atLimit).toBe(false);
+    // Upstream's promo fields never ride out on the management response.
+    const wire = JSON.stringify(json);
+    for (const leaked of ["in_experiment", "resets_per_week", "weekly_resets_at", "next_available_at", "event_props"]) {
+      expect(wire).not.toContain(leaked);
+    }
+  });
+
+  test("a silent, broken, or unreachable juniper leaves the cedar answer standing", async () => {
+    const up = upstream();
+    up.status = barrenCedar;
+    expect((await call("GET", "/api/anthropic/reset-grants", deps(up))).json).toMatchObject({ grants: [], eligible: false });
+    for (const respond of [
+      () => Response.json({ juniper_tide: { eligible: "maybe" } }),
+      () => Response.json({ juniper_tide: juniperBlock({ available: false }) }),
+      () => new Response("upstream exploded", { status: 500 }),
+      () => { throw new TypeError("socket hung up"); },
+    ]) {
+      up.juniper = respond;
+      const { status, json } = await call("GET", "/api/anthropic/reset-grants", deps(up));
+      expect(status).toBe(200);
+      expect(json.grants).toEqual([]);
+      expect(json.ineligibleReason).toBe("tenure");
+    }
+  });
+
+  test("the juniper claim posts the program-only body and reports the 5-hour window", async () => {
+    const up = upstream();
+    up.juniper = () => Response.json(atWall(juniperBlock()));
+    up.claim = () => Response.json({ result: "reset", weekly_resets_at: "2026-10-17T09:00:00+00:00" });
+    const { status, json } = await consume(deps(up), { accountId: "acct-1", grantId: JUNIPER, operationId: OP });
+    expect(status).toBe(200);
+    expect(json).toMatchObject({ code: "reset", replayed: false, resetsLeft: 0, cleared: ["five_hour"], grantId: JUNIPER });
+    expect(up.claims).toHaveLength(1);
+    expect(up.claims[0].url).toBe(`https://api.anthropic.com/api/organizations/${ORG}/reset_rate_limits`);
+    // No grant id and no request id: juniper takes the program and nothing else.
+    expect(up.claims[0].body).toEqual({ program: JUNIPER });
+  });
+
+  test("a juniper grant the fresh gate cannot find is refused without a claim", async () => {
+    const up = upstream();
+    up.status = barrenCedar;
+    up.juniper = () => Response.json(atWall(juniperBlock({ eligible: false, available: false, ineligible_reason: "not_at_wall" })));
+    const result = await consume(deps(up), { accountId: "acct-1", grantId: JUNIPER, operationId: OP });
+    expect(result).toMatchObject({ status: 409, json: { error: { code: "grant_not_usable", reason: "ineligible" } } });
+    expect(up.claims).toEqual([]);
+  });
+
+  test("an unreadable juniper claim stays an unknown outcome and never retries itself", async () => {
+    const up = upstream();
+    up.juniper = () => Response.json(atWall(juniperBlock()));
+    up.claim = () => { throw new TypeError("network down"); };
+    const lost = await consume(deps(up), { accountId: "acct-1", grantId: JUNIPER, operationId: OP });
+    expect(lost).toMatchObject({ status: 502, json: { error: { code: "unknown_outcome", operationId: OP } } });
+    const pending = await call("GET", "/api/anthropic/reset-grants", deps(up));
+    expect(pending.json.pendingOperation).toMatchObject({ operationId: OP, grantId: JUNIPER });
+    // A same-id retry is not re-gated, and it can only ever be that same id.
+    up.claim = () => Response.json({ result: "already_used" });
+    const retried = await consume(deps(up), { accountId: "acct-1", grantId: JUNIPER, operationId: OP });
+    expect(retried).toMatchObject({ status: 200, json: { code: "already_used", replayed: false } });
+    expect(up.claims).toHaveLength(2);
   });
 });

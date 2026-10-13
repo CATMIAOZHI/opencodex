@@ -84,8 +84,8 @@ route-specific results rather than repeating this table.
 | `POST /api/grok/apply` | Apply persisted Grok configuration through the managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
 | `GET /api/grok/reset-coupons?accountId=...` | Read remaining Grok billing reset tokens and validity windows for the active or specified xAI account | 400 missing account; 401 unauthenticated; 502 upstream gRPC-Web error |
 | `POST /api/grok/reset-coupons/consume` | Redeem an eligible reset coupon. Body `{ accountId?, tokenId?, operationId? }`. Optional `operationId` (UUIDv4) makes redemption idempotent: repeating the same ID replays the durable result without double-redemption. | 400 invalid JSON/UUID; 401 unauthenticated; 409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`; 502 upstream error; 503 ledger capacity / `ledger_unavailable`; 500 `attempt_mark_failed` |
-| `GET /api/anthropic/reset-grants?accountId=...` | Read the Claude usage-limit reset grants of one Anthropic OAuth account: eligibility, each grant's resets left, validity window, and the windows it clears, plus any unconfirmed attempt still retryable | 400 no matching account; 401 re-authentication needed; 502 upstream unavailable |
-| `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim. Requires a dashboard session. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
+| `GET /api/anthropic/reset-grants?accountId=...` | Read the Claude usage-limit reset grants of one Anthropic OAuth account: eligibility, each grant's resets left, validity window, and the windows it clears, plus any unconfirmed attempt still retryable. A `juniper_tide` grant clears the 5-hour window only and is offered at most once a week. | 400 no matching account; 401 re-authentication needed; 502 upstream unavailable |
+| `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; for a `cedar_ember` grant `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim, while a `juniper_tide` claim sends the program alone. Requires a dashboard session. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
@@ -101,8 +101,9 @@ The dashboard at **Providers > xAI Grok > Accounts** lists remaining coupons and
 
 Claude usage resets work the same way from **Providers > Anthropic > Accounts**. Each
 signed-in account row carries a ticket badge with its remaining resets, and the dialog
-spends one after a second confirmation. A reset refills the 5-hour and weekly limits
-without moving the weekly reset day. When a claim does not answer, the dialog keeps its
+spends one after a second confirmation. A `cedar_ember` reset refills the 5-hour and
+weekly limits without moving the weekly reset day; a `juniper_tide` reset refills the
+5-hour limit only, and the account is offered at most one a week. When a claim does not answer, the dialog keeps its
 `operationId` and offers a retry with that same ID for ten minutes, which is how the
 Claude Code client itself recovers; a new operation for the same grant is refused
 until then. Spending is dashboard-only: the admin token alone gets `403 session_required`.

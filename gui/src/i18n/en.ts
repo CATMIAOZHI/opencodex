@@ -2754,7 +2754,7 @@ export const en = {
   "anthropicGrant.badgeErrorAria": "Claude usage resets could not be read",
   "anthropicGrant.title": "Claude usage resets",
   "anthropicGrant.available": "This account has {count} usage reset(s).",
-  "anthropicGrant.desc": "A reset refills this account's 5-hour and weekly Claude limits right away. The weekly reset day stays the same.",
+  "anthropicGrant.desc": "A reset refills this account's Claude usage limits right away. Each reset lists the windows it clears.",
   "anthropicGrant.none": "This account has no usage resets.",
   "anthropicGrant.ineligible": "This account is not eligible for usage resets right now.",
   "anthropicGrant.loadFailed": "Could not read usage resets for this account.",

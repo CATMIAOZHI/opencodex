@@ -2661,7 +2661,7 @@ export const ru: Record<TKey, string> = {
   "anthropicGrant.badgeErrorAria": "Не удалось прочитать сбросы лимитов Claude",
   "anthropicGrant.title": "Сбросы лимитов Claude",
   "anthropicGrant.available": "У этого аккаунта доступно сбросов лимитов: {count}.",
-  "anthropicGrant.desc": "Сброс сразу восстанавливает 5-часовой и недельный лимиты Claude для этого аккаунта. День недельного сброса не меняется.",
+  "anthropicGrant.desc": "Сброс сразу восстанавливает лимиты использования Claude для этого аккаунта. Для каждого сброса указано, какие лимиты он восстанавливает.",
   "anthropicGrant.none": "У этого аккаунта нет доступных сбросов лимитов.",
   "anthropicGrant.ineligible": "Сейчас этому аккаунту недоступны сбросы лимитов.",
   "anthropicGrant.loadFailed": "Не удалось прочитать сбросы лимитов для этого аккаунта.",

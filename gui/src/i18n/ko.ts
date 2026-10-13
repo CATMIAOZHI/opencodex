@@ -2179,7 +2179,7 @@ export const ko: Record<TKey, string> = {
   "anthropicGrant.badgeErrorAria": "Claude 사용량 리셋을 읽지 못했습니다",
   "anthropicGrant.title": "Claude 사용량 리셋",
   "anthropicGrant.available": "이 계정에 사용량 리셋이 {count}개 있습니다.",
-  "anthropicGrant.desc": "리셋 1개로 이 계정의 Claude 5시간·주간 한도를 바로 다시 채웁니다. 주간 리셋 요일은 바뀌지 않습니다.",
+  "anthropicGrant.desc": "리셋 1개로 이 계정의 Claude 사용량 한도가 바로 다시 채워집니다. 어떤 한도가 다시 채워지는지는 각 리셋에 표시됩니다.",
   "anthropicGrant.none": "이 계정에는 사용량 리셋이 없습니다.",
   "anthropicGrant.ineligible": "지금은 이 계정에서 사용량 리셋을 쓸 수 없습니다.",
   "anthropicGrant.loadFailed": "이 계정의 사용량 리셋을 읽지 못했습니다.",

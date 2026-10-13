@@ -66,8 +66,8 @@ Authorization: Bearer <admin-token>
 | `POST /api/grok/apply` |管理された同期を通じて永続的な Grok 設定を適用する | 409 `grok_apply_busy`; 400/500 適用失敗 |
 | `GET /api/grok/reset-coupons?accountId=...` | アクティブまたは指定された xAI アカウントの残り Grok 請求リセット トークンと有効期限ウィンドウを読む | 400 アカウントがありません; 401 未認証; 502 上流 gRPC-Web エラー |
 | `POST /api/grok/reset-coupons/consume` | 対象となるリセット クーポンを換金します。本文は `{ accountId?, tokenId?, operationId? }`。任意の `operationId`（UUIDv4）により換金は冪等になります: 同じ ID を繰り返すと、二重換金せずに永続化された結果を再生します。 | 400 無効な JSON/UUID; 401 未認証; 409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`; 502 上流エラー; 503 台帳容量 / `ledger_unavailable`; 500 `attempt_mark_failed` |
-| `GET /api/anthropic/reset-grants?accountId=...` | 1 つの Anthropic OAuth アカウントの Claude 使用量上限リセット付与を読み取ります。対象資格、各付与の残り回数、有効期間、リセットされる使用量枠、再試行可能な未確定の試行が含まれます。 | 400 該当するアカウントなし; 401 再認証が必要; 502 上流を利用できません |
-| `POST /api/anthropic/reset-grants/consume` | リセット付与を 1 回分使用します。本文は `{ accountId, grantId, operationId }`。`operationId` はリクエスト ID として上流へ送信する UUIDv4 で、同じ値を繰り返すと同じ請求を再試行します。ダッシュボードセッションが必要です。 | 400 無効な本文; 401 再認証が必要; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 ジャーナルが使用中、利用不可、または満杯 |
+| `GET /api/anthropic/reset-grants?accountId=...` | 1 つの Anthropic OAuth アカウントの Claude 使用量上限リセット付与を読み取ります。対象資格、各付与の残り回数、有効期間、リセットされる使用量枠、再試行可能な未確定の試行が含まれます。`juniper_tide` の付与は 5 時間枠のみをリセットし、週に 1 回だけ提示されます。 | 400 該当するアカウントなし; 401 再認証が必要; 502 上流を利用できません |
+| `POST /api/anthropic/reset-grants/consume` | リセット付与を 1 回分使用します。本文は `{ accountId, grantId, operationId }`。`cedar_ember` の付与では `operationId` はリクエスト ID として上流へ送信する UUIDv4 で、同じ値を繰り返すと同じ請求を再試行します。`juniper_tide` の請求はプログラムのみを送信します。ダッシュボードセッションが必要です。 | 400 無効な本文; 401 再認証が必要; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 ジャーナルが使用中、利用不可、または満杯 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop のルーティング/ネイティブ プロファイルを読み取るか永続化する | 400 無効または使用できない割り当て |
 | `POST /api/claude-desktop/apply` |保存したプロファイルを Claude Desktop の管理対象設定に書き込みます。 400/500 書き込み失敗 |
 | `GET /api/claude-desktop/status` |保存済みプロファイルと適用済みプロファイルおよびデスクトップの健全性を検査する | 400 ステータス読み取り失敗 |
@@ -81,7 +81,7 @@ Authorization: Bearer <admin-token>
 
 **Providers > xAI Grok > Accounts** の各アカウントのチケットバッジから、残りのクーポンと有効期間を確認できます。ダイアログはクライアントで生成した `operationId` を送信します。送信や結果が不確定な場合、アカウントコントローラーがマウントされている間は同じ試行を保持し、ダイアログを閉じて開き直しても維持します。更新は GET のみで、追加の使用 POST を許可しません。`ocx account grok-reset-coupons` は対応するターミナルコマンドです。
 
-Claude の使用量リセットも **Providers > Anthropic > Accounts** から同様に操作できます。サインイン済みの各アカウント行には残りのリセット回数を示すチケットバッジがあり、ダイアログで再度確認した後に 1 回分を使用します。リセットすると、週次枠のリセット曜日を変えずに 5 時間枠と週次枠が補充されます。請求に応答がない場合、ダイアログは `operationId` を保持し、10 分間は同じ ID で再試行できます。Claude Code クライアント自体もこの方法で復旧し、その間は同じ付与に対する新しい操作が拒否されます。使用できるのはダッシュボードからのみで、管理者トークンだけでは `403 session_required` が返されます。
+Claude の使用量リセットも **Providers > Anthropic > Accounts** から同様に操作できます。サインイン済みの各アカウント行には残りのリセット回数を示すチケットバッジがあり、ダイアログで再度確認した後に 1 回分を使用します。`cedar_ember` のリセットは週次枠のリセット曜日を変えずに 5 時間枠と週次枠を補充し、`juniper_tide` のリセットは 5 時間枠のみを補充します（提示は週に 1 回まで）。請求に応答がない場合、ダイアログは `operationId` を保持し、10 分間は同じ ID で再試行できます。Claude Code クライアント自体もこの方法で復旧し、その間は同じ付与に対する新しい操作が拒否されます。使用できるのはダッシュボードからのみで、管理者トークンだけでは `403 session_required` が返されます。
 
 モデルロスターと暗号化されたワーカータスクの動作の背後にある概念については、「[サブエージェントサーフェス](/guides/sub-agent-surface/)」を参照してください。
 

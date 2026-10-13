@@ -2000,7 +2000,7 @@ export const zhTW: Record<TKey, string> = {
   "anthropicGrant.badgeErrorAria": "無法讀取 Claude 用量重設次數",
   "anthropicGrant.title": "Claude 用量重設",
   "anthropicGrant.available": "此帳號有 {count} 次用量重設機會。",
-  "anthropicGrant.desc": "每次重設都會立即補滿此帳號的 Claude 5 小時與每週額度。每週重設日維持不變。",
+  "anthropicGrant.desc": "每次重設都會立即補滿此帳號的 Claude 用量額度。每個重設機會標明它清空的額度視窗。",
   "anthropicGrant.none": "此帳號沒有用量重設機會。",
   "anthropicGrant.ineligible": "此帳號目前不符合用量重設資格。",
   "anthropicGrant.loadFailed": "無法讀取此帳號的用量重設資訊。",

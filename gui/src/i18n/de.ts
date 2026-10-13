@@ -2134,7 +2134,7 @@ export const de: Record<TKey, string> = {
   "anthropicGrant.badgeErrorAria": "Claude-Nutzungslimit-Rücksetzungen konnten nicht gelesen werden",
   "anthropicGrant.title": "Claude-Nutzungslimit-Rücksetzungen",
   "anthropicGrant.available": "Für dieses Konto sind {count} Nutzungslimit-Rücksetzungen verfügbar.",
-  "anthropicGrant.desc": "Eine Rücksetzung füllt die 5-Stunden- und Wochenlimits dieses Claude-Kontos sofort wieder auf. Der Tag der wöchentlichen Rücksetzung bleibt gleich.",
+  "anthropicGrant.desc": "Eine Rücksetzung füllt die Claude-Nutzungslimits dieses Kontos sofort wieder auf. Jede Rücksetzung zeigt, welche Limits sie zurücksetzt.",
   "anthropicGrant.none": "Für dieses Konto sind keine Nutzungslimit-Rücksetzungen verfügbar.",
   "anthropicGrant.ineligible": "Dieses Konto ist derzeit nicht für Nutzungslimit-Rücksetzungen berechtigt.",
   "anthropicGrant.loadFailed": "Die Nutzungslimit-Rücksetzungen für dieses Konto konnten nicht gelesen werden.",

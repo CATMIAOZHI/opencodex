@@ -29,6 +29,13 @@ import {
   fetchAnthropicResetGrantStatus,
 } from "../../providers/anthropic-reset-grants";
 import {
+  ANTHROPIC_JUNIPER_GRANT_ID,
+  claimAnthropicJuniperReset,
+  mergeAnthropicResetStatus,
+  readAnthropicJuniperStatus,
+  spendableAnthropicResetGrant,
+} from "../../providers/anthropic-juniper-reset";
+import {
   AnthropicResetLedgerError,
   anthropicOrgDigest,
   anthropicResetOperationExists,
@@ -167,6 +174,15 @@ async function handleRead(ctx: ManagementContext, deps: AnthropicResetGrantRoute
     return readFailure(ctx, error, receipt);
   }
   if (deps.isCurrent?.() === false) return fail(ctx, 401, "auth_failed", receipt);
+  // The juniper_tide (5-hour-only) offer rides on a second, separate upstream read.
+  // It is only worth asking for when cedar has nothing to spend, and it degrades to
+  // "no offer" on any transport failure, so an optional entitlement can never turn
+  // the cedar answer into an error.
+  if (!spendableAnthropicResetGrant(status)) {
+    const probe = await readAnthropicJuniperStatus({ accessToken, fetchFn: deps.fetchFn });
+    if (deps.isCurrent?.() === false) return fail(ctx, 401, "auth_failed", receipt);
+    status = mergeAnthropicResetStatus(status, probe);
+  }
   let pendingOperation = null;
   let journalAvailable = true;
   try {
@@ -223,6 +239,13 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
     let status;
     try {
       status = await fetchAnthropicResetGrantStatus({ accessToken, fetchFn: deps.fetchFn });
+      if (grantId === ANTHROPIC_JUNIPER_GRANT_ID) {
+        // The pre-spend gate must see the same offer the dashboard rendered, so the
+        // juniper grant reads the extra probe. A cedar grant keeps the single cedar
+        // read it has always had: that read is the whole gate for that program.
+        const probe = await readAnthropicJuniperStatus({ accessToken, fetchFn: deps.fetchFn });
+        status = mergeAnthropicResetStatus(status, probe);
+      }
     } catch (error) {
       return readFailure(ctx, error, operationReceipt);
     }
@@ -256,9 +279,13 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
 
   let answer;
   try {
-    answer = await claimAnthropicResetGrant({
-      accessToken, organizationUuid, grantId, requestId: operationId, fetchFn: deps.fetchFn,
-    });
+    answer = grantId === ANTHROPIC_JUNIPER_GRANT_ID
+      // juniper files its own body — {"program":"juniper_tide"} and nothing else, so
+      // the operation id stays a local ledger key and is never sent upstream.
+      ? await claimAnthropicJuniperReset({ accessToken, organizationUuid, fetchFn: deps.fetchFn })
+      : await claimAnthropicResetGrant({
+        accessToken, organizationUuid, grantId, requestId: operationId, fetchFn: deps.fetchFn,
+      });
   } catch {
     try {
       releaseAnthropicResetLease(operationId, { journalPath: deps.journalPath, now: deps.now?.() });

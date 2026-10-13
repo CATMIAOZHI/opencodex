@@ -2689,7 +2689,7 @@ export const tr: Record<TKey, string> = {
   "anthropicGrant.badgeErrorAria": "Claude kullanım sıfırlamaları okunamadı",
   "anthropicGrant.title": "Claude Kullanım Sıfırlamaları",
   "anthropicGrant.available": "Bu hesapta {count} kullanım sıfırlaması var.",
-  "anthropicGrant.desc": "Bir sıfırlama, bu hesabın 5 saatlik ve haftalık Claude limitlerini hemen yeniler. Haftalık sıfırlama günü değişmez.",
+  "anthropicGrant.desc": "Bir sıfırlama, bu hesabın Claude kullanım limitlerini hemen yeniler. Her sıfırlama hangi limitleri yenilediğini gösterir.",
   "anthropicGrant.none": "Bu hesapta kullanım sıfırlaması yok.",
   "anthropicGrant.ineligible": "Bu hesap şu anda kullanım sıfırlamalarından yararlanamıyor.",
   "anthropicGrant.loadFailed": "Bu hesabın kullanım sıfırlamaları okunamadı.",
