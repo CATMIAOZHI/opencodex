@@ -9,7 +9,7 @@
  * Codex threads accumulate screenshots in history, so long sessions cross 20 images
  * easily and any single retina capture (>2000px wide) kills every later turn. The
  * PRIMARY layer is now anthropic-image-normalize.ts (Bun.Image resize/re-encode with an
- * age-tier pyramid — devlog/260714_image_normalization_pipeline/020), which runs before
+ * request-local quality ladder), which runs before
  * this guard; these rules remain the deterministic BACKSTOP for whatever normalization
  * could not shrink (undecodable passthroughs, all-terminal overflow). When this guard
  * must drop, it textifies the OLDEST image blocks — newest screenshots are the ones the

@@ -263,6 +263,11 @@ MiMo model Command Code serves.
 **Auth:** `key` (`x-api-key` by default, or `Authorization: Bearer` with `apiKeyTransport: "bearer"`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
 
 - Converts messages to Anthropic content blocks (text, base64 image, `tool_use`, `thinking`).
+- Image quality starts from a fixed tier on every request. Repeated screenshots, other
+  conversations, and proxy restarts do not change that tier. Images are still compressed
+  to meet per-image limits and the 20 MiB total Base64 budget; a 413 retry can also lower
+  quality. Those necessary reductions can change the cached prefix. This preserves more
+  detail in older images than age-based compression, so image payloads can be larger.
 - Translated Anthropic Messages reasoning replay shares the request translation budget, including
   encoding/decoding copy overhead. Requests exceeding it return HTTP 413 with
   `translation_buffer_limit`; signatures and opaque reasoning data are never truncated to fit.

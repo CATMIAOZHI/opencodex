@@ -156,7 +156,7 @@ export async function normalizeKiroImages(
   }
 
   // Request count cap BEFORE the byte budget: a surplus image must not push survivors to
-  // lower tiers, which #4532 then pins across turns. Only structurally usable images count
+  // lower tiers unnecessarily. Only structurally usable images count
   // (bytes present, within the bomb limits, dimensions sniffable), so a corrupt image cannot
   // evict valid history; the normalizer below still drops it with its own marker. This stays
   // a cheap header check: truncated data that still sniffs as an image does count.

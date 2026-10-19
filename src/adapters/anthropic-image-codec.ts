@@ -13,7 +13,8 @@ const KiB = 1024;
 const MiB = 1024 * 1024;
 
 /**
- * Ladder positions 0-5. 0-2 are the age-assigned tiers; 3-5 are demotion floor steps.
+ * Ladder positions 0-5. Requests start at 0 (or the explicit retry bias);
+ * higher positions are per-image and aggregate-budget demotion steps.
  * Terminal (last) accepts its measured output so the aggregate loop always terminates
  * (audit round 2, blocker 1).
  */
@@ -26,10 +27,6 @@ export const TIER_SPECS: TierSpec[] = [
   { maxEdge: 320, qualities: [25], hardCap: Infinity },
 ];
 export const TERMINAL_POS = TIER_SPECS.length - 1;
-
-/** Newest 6 images ride tier 0, the next 14 tier 1, the rest tier 2 (020 tier table). */
-export const TIER0_COUNT = 6;
-export const TIER1_COUNT = 14;
 
 /** Decode-bomb guards: refuse to decode absurd inputs (020 guards; "extreme values excluded"). */
 export const MAX_INPUT_BASE64_LENGTH = 64 * MiB;
@@ -109,89 +106,6 @@ let cacheMetadataBytes = 0;
 let cacheSentinelEntries = 0;
 let encodeCalls = 0;
 
-/**
- * Last-EMITTED ladder position per image identity (#4532). The age-tier pyramid in
- * anthropic-image-normalize derives an image's start position from its recency rank
- * within the current request, so appending one newer image shifts every older image's
- * rank by one and can push it across a tier boundary — re-encoding it to different
- * bytes and busting Anthropic's prompt prefix cache for the whole history. Pinning the
- * start position to the image's own identity keeps already-emitted bytes stable across
- * appends. Keys are fixed-size digests of the bytes and canonical media type, so
- * caller-controlled metadata cannot make the retained identity arbitrarily large.
- * The bytes count toward the shared retained-memory budget but are pinned: the
- * shared evictor clears normalization cache slots first and never drops position
- * memory, because a request reads this store before it finishes and a mid-request
- * eviction would make a repeated image lose its pinned position and fall back to
- * an age-derived tier. Positions shrink only through this store's own entry-count
- * cap, applied when positions are committed after the request settles.
- */
-const POSITION_STORE_MAX_ENTRIES = 4_096;
-const MAX_CANONICAL_MEDIA_TYPE_LENGTH = 127;
-const MEDIA_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/;
-interface PositionEntry { position: number; sizeBytes: number; storedAt: number }
-const emittedPositions = new Map<string, PositionEntry>();
-let positionBytes = 0;
-
-function positionKey(b64: string, mediaType: string): string {
-  const normalized = mediaType.trim().toLowerCase();
-  const canonical = normalized.length <= MAX_CANONICAL_MEDIA_TYPE_LENGTH && MEDIA_TYPE_PATTERN.test(normalized)
-    ? normalized
-    // Keep invalid/overlong types distinct under an "invalid:" namespace: folding
-    // them all onto application/octet-stream let a different invalid type reuse a
-    // prior emitted position and demote the second image to a smaller tier. The
-    // prefix cannot collide with a valid canonical type (':' fails the pattern).
-    : `invalid:${normalized}`;
-  return new Bun.CryptoHasher("sha256").update(b64).update("\0").update(canonical).digest("hex");
-}
-
-function deletePositionEntry(key: string): number {
-  const entry = emittedPositions.get(key);
-  if (!entry) return 0;
-  emittedPositions.delete(key);
-  positionBytes -= entry.sizeBytes;
-  return entry.sizeBytes;
-}
-
-/**
- * The position this image was last emitted at, if it has been normalized before.
- * Reads refresh recency (insertion-order LRU, same discipline as the encode cache).
- */
-export function recordedEmittedPosition(b64: string, mediaType: string): number | undefined {
-  const key = positionKey(b64, mediaType);
-  const entry = emittedPositions.get(key);
-  if (entry !== undefined) {
-    emittedPositions.delete(key);
-    entry.storedAt = Date.now();
-    emittedPositions.set(key, entry);
-  }
-  return entry?.position;
-}
-
-/**
- * Record the position an image actually ended at. Positions only ever move DOWN the
- * ladder (first-pass tier, aggregate demotion, tierBias) — nothing raises an image
- * back up — so the stored value is monotonically non-decreasing and cannot flap.
- * That monotonicity is what makes identity-pinning safe: a stale entry can only make
- * an image smaller than its fresh tier would, never larger.
- */
-export function recordEmittedPosition(b64: string, mediaType: string, pos: number): void {
-  const key = positionKey(b64, mediaType);
-  const existing = emittedPositions.get(key);
-  if (existing !== undefined) {
-    deletePositionEntry(key);
-    pos = Math.max(existing.position, pos);
-  }
-  while (emittedPositions.size + 1 > POSITION_STORE_MAX_ENTRIES) {
-    const oldest = emittedPositions.keys().next().value;
-    if (oldest === undefined) break;
-    deletePositionEntry(oldest);
-  }
-  const sizeBytes = cacheEncoder.encode(key).byteLength + 16;
-  emittedPositions.set(key, { position: pos, sizeBytes, storedAt: Date.now() });
-  positionBytes += sizeBytes;
-  enforceAppOwnedMemoryBudget();
-}
-
 function cacheEntry(key: string, value: CacheValue): CacheEntry {
   const keyBytes = cacheEncoder.encode(key).byteLength;
   const valueBytes = typeof value === "string"
@@ -254,8 +168,6 @@ export function getNormalizeStatsForTests(): {
   cacheBytes: number;
   sentinelEntries: number;
   metadataBytes: number;
-  positionEntries: number;
-  positionBytes: number;
   oldestAt: number | null;
 } {
   return {
@@ -264,15 +176,11 @@ export function getNormalizeStatsForTests(): {
     cacheBytes,
     sentinelEntries: cacheSentinelEntries,
     metadataBytes: cacheMetadataBytes,
-    positionEntries: emittedPositions.size,
-    positionBytes,
     oldestAt: cache.values().next().value?.storedAt ?? null,
   };
 }
 export function resetNormalizeStateForTests(): void {
   cache.clear();
-  emittedPositions.clear();
-  positionBytes = 0;
   cacheBytes = 0;
   cacheMetadataBytes = 0;
   cacheSentinelEntries = 0;
@@ -292,20 +200,16 @@ export function anthropicImageNormalizeRetainedStoreSnapshot(): {
   oldestAt: number | null;
 } {
   return {
-    count: cache.size + emittedPositions.size,
-    bytes: cacheBytes + positionBytes,
+    count: cache.size,
+    bytes: cacheBytes,
     evictableBytes: cacheBytes,
-    pinnedBytes: positionBytes,
+    pinnedBytes: 0,
     oldestAt: cache.values().next().value?.storedAt ?? null,
   };
 }
 
 export function evictOldestAnthropicImageNormalizeForBudget(): number {
-  // Position memory is pinned for the life of a request (see the store comment):
-  // the shared budget reclaims normalization cache slots first, and a position
-  // entry is only released by recordEmittedPosition's own entry-count cap after
-  // the request settles. A cache miss is cheaper than losing an image's pinned
-  // ladder position mid-request.
+  // Eviction only costs encoding work; request-local tier selection is unchanged.
   const cacheOldest = cache.entries().next().value as [string, CacheEntry] | undefined;
   return cacheOldest ? deleteCacheEntry(cacheOldest[0]) : 0;
 }

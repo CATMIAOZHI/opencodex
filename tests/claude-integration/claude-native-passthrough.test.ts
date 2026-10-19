@@ -523,7 +523,7 @@ async function postNative(serverUrl: string, path: string, body: Record<string, 
   return fetch(new URL(path, serverUrl), { method: "POST", headers: OAUTH_HEADERS, body: JSON.stringify(body) });
 }
 
-test("P1: 30-image history arrives age-tiered — newest pass through, older shrink, none dropped", async () => {
+test("P1: under-budget 30-image history keeps original bytes regardless of age", async () => {
   resetNormalizeStateForTests();
   const captured: Captured[] = [];
   const upstream = mockAnthropicUpstream(captured);
@@ -535,13 +535,7 @@ test("P1: 30-image history arrives age-tiered — newest pass through, older shr
     expect(res.status).toBe(200);
     const images = capturedBlocks(captured).filter(b => b.type === "image");
     expect(images).toHaveLength(30);
-    // Wire order oldest first: 0-9 tier2 (<=700 jpeg), 10-23 tier1 (<=1024), 24-29 tier0 pass-through png.
-    for (let i = 0; i < 10; i++) {
-      expect(images[i].source?.media_type).toBe("image/jpeg");
-      const d = sniffImageDimensions(images[i].source?.data ?? "");
-      expect(Math.max(d!.width, d!.height)).toBeLessThanOrEqual(700);
-    }
-    for (let i = 24; i < 30; i++) {
+    for (let i = 0; i < 30; i++) {
       expect(images[i].source?.media_type).toBe("image/png");
       expect(images[i].source?.data).toBe(src);
     }
