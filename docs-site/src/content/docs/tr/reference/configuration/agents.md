@@ -193,9 +193,11 @@ Kabul ve saklama kasıtlı olarak dardır:
   arayan başlığı bu sınırı geçmez;
 - kurtarılan düz metin asla günlüğe kaydedilmez veya kalıcı hale getirilmez;
   süreç içi yerel önbellek kimlik bilgisi, üst iş parçacığı ve şifreli metin
-  kapsamındadır, 15 dakika sonra sona erer ve hem yapılandırılmış girdi sayısı
-  (varsayılan olarak 200, maksimum 512) hem de toplam 8 MiB ile
-  sınırlandırılmıştır;
+  kapsamındadır, yetkili erişim olmadan 24 saat sonra sona erer ve hem yapılandırılmış girdi sayısı
+  (varsayılan olarak 2000, maksimum 10000) hem de toplam 128 MiB ile
+  sınırlandırılmıştır. Yetkili erişimler süreyi ve LRU konumunu ek istek olmadan yeniler.
+  Bu süre Claude istem önbelleğinden ayrıdır; yeniden başlatma, kimlik bilgisi değişimi,
+  süre dolması veya kapasite nedeniyle çıkarılma geçmişi kaybettirebilir;
 - hatalı biçimlendirilmiş herhangi bir zarf, başarısız kurtarma, zaman aşımı
   veya doğrulama hatası mevcut kapalı başarısız olma hatasını korur; istemci
   iptali 499 döndürür. Hiçbir yol şifreli metni yönlendirilen sağlayıcıya
@@ -226,7 +228,7 @@ değerlendirilmelidir.
     "enabled": true,
     "model": "gpt-5.6-sol",
     "timeoutMs": 45000,
-    "cacheEntries": 200
+    "cacheEntries": 2000
   }
 }
 ```

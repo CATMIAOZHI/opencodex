@@ -856,7 +856,7 @@ export interface OcxConfig {
     model?: string;
     /** Recovery request timeout in milliseconds. Default: 45000. */
     timeoutMs?: number;
-    /** Maximum in-memory ciphertext-to-assignment entries. Default: 200. */
+    /** Maximum in-memory ciphertext-to-assignment entries. Default: 2000; maximum: 10000. */
     cacheEntries?: number;
     /**
      * Extra recovery sends when ChatGPT rejects with a transient 5xx or the transport

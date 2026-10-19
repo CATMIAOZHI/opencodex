@@ -281,8 +281,11 @@ Admission and retention are deliberately narrow:
   `originator`, and optional `openai-beta` and `user-agent` metadata; opencodex sets `content-type`
   and `accept` itself, and no other caller headers cross this boundary;
 - recovered plaintext is never logged or persisted; the process-local cache is credential-, parent-
-  thread-, and ciphertext-scoped, expires after 15 minutes, and is bounded by both configured entry
-  count (200 by default, 512 maximum) and 8 MiB total;
+  thread-, and ciphertext-scoped, expires after 24 hours without an admitted hit, and is bounded
+  by both configured entry count (2,000 by default, 10,000 maximum) and 128 MiB total.
+  Admitted replay hits renew the idle deadline and LRU position locally, without a recovery request.
+  This is separate from Claude's prompt-cache TTL; restart, credential rotation, idle expiration
+  and capacity eviction can still lose recovered history;
 - any malformed envelope, failed recovery, timeout, or validation failure preserves the existing
   fail-closed error; client cancellation returns 499. Neither path forwards ciphertext to the
   routed provider.
@@ -323,7 +326,7 @@ model output rather than authenticated plaintext.
     "enabled": true,
     "model": "gpt-5.6-sol",
     "timeoutMs": 45000,
-    "cacheEntries": 200,
+    "cacheEntries": 2000,
     "retries": 0
   }
 }

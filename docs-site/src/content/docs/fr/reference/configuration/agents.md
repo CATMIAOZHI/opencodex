@@ -89,7 +89,7 @@ Les règles d’admission et de conservation sont volontairement strictes :
 - les appelants qui utilisent `x-opencodex-api-key`, `x-api-key`, des identifiants d’API génériques ou un secret d’admission du proxy continuent de recevoir l’erreur `unreadable_encrypted_agent_task` existante ;
 - les identifiants ChatGPT bruts sont envoyés uniquement au point de terminaison ChatGPT codé en dur. Ils ne sont jamais placés dans le corps de la requête, les journaux, les clés de cache ou la requête destinée au fournisseur. La portée du cache en mémoire n’utilise qu’un condensat, calculé avec une clé aléatoire propre au processus, de l’identifiant et du compte de l’appelant ;
 - la requête de récupération ne transmet que `authorization`, le `chatgpt-account-id` concordant, `originator` et, facultativement, les métadonnées `openai-beta` et `user-agent`. opencodex définit lui-même `content-type` et `accept` ; aucun autre en-tête de l’appelant ne franchit cette limite ;
-- le texte en clair récupéré n’est jamais journalisé ni conservé. Le cache propre au processus est cloisonné par identifiant, fil parent et texte chiffré ; il expire après 15 minutes et est limité à la fois par le nombre d’entrées configuré (200 par défaut, 512 au maximum) et par une taille totale de 8 MiB ;
+- le texte en clair récupéré n’est jamais journalisé ni enregistré sur disque. Le cache propre au processus est cloisonné par identifiant, fil parent et texte chiffré ; il expire après 24 heures sans accès autorisé et est limité à la fois par le nombre d’entrées configuré (2 000 par défaut, 10 000 au maximum) et par une taille totale de 128 MiB. Chaque accès autorisé renouvelle localement le délai et la position LRU, sans requête supplémentaire. Ce délai est distinct du cache de prompts de Claude ; un redémarrage, une rotation des identifiants, une expiration ou une éviction peuvent encore supprimer cet historique ;
 - toute enveloppe mal formée, tout échec de récupération, dépassement de délai ou échec de validation conserve l’erreur fermée existante. Une annulation par le client renvoie 499. Aucun des deux chemins n’envoie le texte chiffré au fournisseur routé.
 
 ### Modèle de menace
@@ -104,7 +104,7 @@ Ce mécanisme ne protège pas contre un autre processus exécuté sous le même 
     "enabled": true,
     "model": "gpt-5.6-sol",
     "timeoutMs": 45000,
-    "cacheEntries": 200
+    "cacheEntries": 2000
   }
 }
 ```

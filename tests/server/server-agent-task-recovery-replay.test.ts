@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createKiroAdapter } from "../../src/adapters/kiro";
+import { createAnthropicAdapter } from "../../src/adapters/anthropic";
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
 import { parseRequest } from "../../src/responses/parser";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../src/responses/turn-termination";
@@ -47,6 +48,73 @@ test("replay does not recover unseen envelopes, other parents, or other callers"
     expect(JSON.stringify(input)).toContain(FERNET_TASK);
   }
   expect(calls).toBe(1);
+});
+
+test("active encrypted history keeps its Anthropic prefix across multiple days", async () => {
+  const started = Date.now();
+  let now = started;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return new Response(recoverySse("Stable recovered task."));
+  }) as typeof fetch;
+  try {
+    const headers = codexHeaders();
+    headers.set("authorization", `Bearer ${fakeChatGptJwt("acct-caller", { exp: Math.floor(started / 1000) + 72 * 3600 })}`);
+    const req = new Request("http://localhost/v1/responses", { headers });
+    const config = routedConfig();
+    const adapter = createAnthropicAdapter({
+      adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "key", apiKey: "test-key",
+    }, "long");
+    const initial = encryptedInput();
+    expect(await recoverEncryptedAgentTask(req, initial, {}, config)).toBe(true);
+    const wireMessages = async (input: unknown[]) => {
+      const parsed = parseRequest({ model: "anthropic/claude-opus-5-5", input, stream: false });
+      // Breakpoint markers move as history grows; the cached message content must not change.
+      return JSON.parse((await adapter.buildRequest(parsed)).body as string,
+        (key, value) => key === "cache_control" ? undefined : value).messages;
+    };
+    const prefix = await wireMessages(initial);
+    for (const minutes of [16, 59, 118, 23 * 60, 46 * 60]) {
+      now = started + minutes * 60_000;
+      const replay = [...encryptedInput(), { type: "message", role: "assistant", content: "Still working." },
+        { type: "message", role: "user", content: "Continue." }];
+      expect(restoreCachedEncryptedAgentTasks(req, replay, config)).toBe(1);
+      expect((await wireMessages(replay)).slice(0, prefix.length)).toEqual(prefix);
+    }
+    expect(calls).toBe(1);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test("denied historical replays do not renew another caller's idle deadline", async () => {
+  const started = Date.now();
+  let now = started;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let calls = 0;
+  globalThis.fetch = (async () => { calls++; return new Response(recoverySse("Private task.")); }) as typeof fetch;
+  try {
+    const headers = codexHeaders();
+    headers.set("authorization", `Bearer ${fakeChatGptJwt("acct-caller", { exp: Math.floor(started / 1000) + 48 * 3600 })}`);
+    const req = new Request("http://localhost/v1/responses", { headers });
+    const config = routedConfig();
+    expect(await recoverEncryptedAgentTask(req, encryptedInput(), {}, config)).toBe(true);
+    now += 23 * 3600_000;
+    const expiredHeaders = new Headers(headers);
+    expiredHeaders.set("authorization", `Bearer ${fakeChatGptJwt("acct-caller", { exp: Math.floor(started / 1000) })}`);
+    for (const denied of [new Request(req.url), new Request(req.url, { headers: expiredHeaders }),
+      new Request(req.url, { headers: codexHeaders("other-account") })]) {
+      expect(restoreCachedEncryptedAgentTasks(denied, encryptedInput(), config)).toBe(0);
+    }
+    expect(restoreCachedEncryptedAgentTasks(req, encryptedInput(), config, { parentThreadId: "other-parent" })).toBe(0);
+    now = started + 24 * 3600_000;
+    expect(restoreCachedEncryptedAgentTasks(req, encryptedInput(), config)).toBe(0);
+    expect(calls).toBe(1);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 test("a rotated token for the same account cannot reuse the previous credential's recovery", async () => {

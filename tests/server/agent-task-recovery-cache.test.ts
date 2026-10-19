@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   agentTaskRecoveryCacheSnapshotForTests,
   agentTaskRecoveryWaiterCountForTests,
@@ -7,9 +7,11 @@ import {
   resolveCachedAgentTaskRecovery,
 } from "../../src/server/responses/agent-task-recovery-cache";
 import {
+  agentTaskRecoveryConfig,
   recoverEncryptedAgentTaskWithResult,
   restoreCachedEncryptedAgentTasks,
 } from "../../src/server/responses/agent-task-recovery";
+import { agentTaskRecoverySchema } from "../../src/config/schema/leaf-validators";
 import {
   codexHeaders,
   encryptedInput,
@@ -232,7 +234,7 @@ describe("agent task recovery cache", () => {
     }
   });
 
-  test("read-only hits retain the original expiry and exact-expiry reads release UTF-8 bytes", async () => {
+  test("local replay hits renew idle expiry and exact-expiry reads release UTF-8 bytes", async () => {
     const insertedAt = 1_800_000_000_000;
     let now = insertedAt;
     Date.now = () => now;
@@ -244,12 +246,12 @@ describe("agent task recovery cache", () => {
       return "한😀"; // Three UTF-8 bytes plus four, rather than three UTF-16 code units.
     })).toBe("한😀");
 
-    for (const elapsed of [0, 60_000, 15 * 60 * 1000 - 1]) {
+    for (const elapsed of [0, 16 * 60 * 1000, 59 * 60 * 1000, 118 * 60 * 1000]) {
       now = insertedAt + elapsed;
       expect(cachedAgentTaskRecovery("task")).toBe("한😀");
       expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 1, bytes: 7 });
     }
-    now = insertedAt + 15 * 60 * 1000;
+    now += 24 * 60 * 60 * 1000;
     expect(cachedAgentTaskRecovery("task")).toBeNull();
     expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 0, bytes: 0 });
     expect(cachedAgentTaskRecovery("task")).toBeNull();
@@ -287,17 +289,67 @@ describe("agent task recovery cache", () => {
     expect(requests).toBe(1);
   });
 
-  test("expires recovered plaintext after fifteen minutes", async () => {
+  test("recovery cache hits renew idle expiry without another recovery", async () => {
     let now = 1_800_000_000_000;
     Date.now = () => now;
     let requests = 0;
     const recover = async (): Promise<string> => `assignment-${++requests}`;
 
     expect(await resolveCachedAgentTaskRecovery("task", 200, recover)).toBe("assignment-1");
+    now += 23 * 60 * 60 * 1000;
     expect(await resolveCachedAgentTaskRecovery("task", 200, recover)).toBe("assignment-1");
-    now += 15 * 60 * 1000 + 1;
+    now += 23 * 60 * 60 * 1000;
+    expect(await resolveCachedAgentTaskRecovery("task", 200, recover)).toBe("assignment-1");
+    expect(requests).toBe(1);
+    now += 24 * 60 * 60 * 1000;
     expect(await resolveCachedAgentTaskRecovery("task", 200, recover)).toBe("assignment-2");
     expect(requests).toBe(2);
+  });
+
+  test.each(["replay", "recovery"])("%s hits retain recently used entries under capacity pressure", async kind => {
+    await resolveCachedAgentTaskRecovery("a", 2, async () => "first");
+    await resolveCachedAgentTaskRecovery("b", 2, async () => "second");
+    if (kind === "replay") expect(cachedAgentTaskRecovery("a")).toBe("first");
+    else expect(await resolveCachedAgentTaskRecovery("a", 2, async () => {
+      throw new Error("A cache hit must not recover again");
+    })).toBe("first");
+    await resolveCachedAgentTaskRecovery("c", 2, async () => "third");
+    expect(cachedAgentTaskRecovery("b")).toBeNull();
+    expect(cachedAgentTaskRecovery("a")).toBe("first");
+    expect(cachedAgentTaskRecovery("c")).toBe("third");
+    expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 2, bytes: 10 });
+  });
+
+  test("schema and recovery config agree on expanded entry bounds", () => {
+    expect(agentTaskRecoveryConfig(routedConfig())?.cacheEntries).toBe(2_000);
+    expect(agentTaskRecoverySchema.safeParse({ enabled: true, cacheEntries: 10_000 }).success).toBe(true);
+    expect(agentTaskRecoverySchema.safeParse({ enabled: true, cacheEntries: 10_001 }).success).toBe(false);
+    expect(agentTaskRecoveryConfig(routedConfig({ enabled: true, cacheEntries: 20_000 }))?.cacheEntries).toBe(10_000);
+    expect(agentTaskRecoveryConfig(routedConfig({ enabled: true, cacheEntries: 1 }))?.cacheEntries).toBe(1);
+  });
+
+  test("idle timer is renewed and a superseded callback cannot evict live plaintext", async () => {
+    const timers: Array<{ fire: () => void; delay: number | undefined; handle: ReturnType<typeof setTimeout> }> = [];
+    const schedule = spyOn(globalThis, "setTimeout").mockImplementation(((fire: () => void, delay?: number) => {
+      const handle = { unref() {} } as unknown as ReturnType<typeof setTimeout>;
+      timers.push({ fire, delay, handle });
+      return handle;
+    }) as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    try {
+      await resolveCachedAgentTaskRecovery("timer", 200, async () => "value");
+      expect(cachedAgentTaskRecovery("timer")).toBe("value");
+      expect(clear).toHaveBeenCalledWith(timers[0]!.handle);
+      expect(timers.map(timer => timer.delay)).toEqual([86_400_000, 86_400_000]);
+      timers[0]!.fire();
+      expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 1, bytes: 5 });
+      timers[1]!.fire();
+      expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 0, bytes: 0 });
+    } finally {
+      resetAgentTaskRecoveryCache();
+      schedule.mockRestore();
+      clear.mockRestore();
+    }
   });
 
   test("keeps a shared request alive while one authenticated waiter remains", async () => {
@@ -352,17 +404,19 @@ describe("agent task recovery cache", () => {
   test("evicts oldest recovered plaintext when the byte budget is exceeded", async () => {
     const assignment = "x".repeat(2 * 1024 * 1024);
     let requests = 0;
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 65; index += 1) {
       expect((await resolveCachedAgentTaskRecovery(`large-${index}`, 200, async () => {
         requests += 1;
         return assignment;
       }))?.length).toBe(assignment.length);
     }
-
+    expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 64, bytes: 128 * 1024 * 1024 });
+    expect(cachedAgentTaskRecovery("large-0")).toBeNull();
+    expect(cachedAgentTaskRecovery("large-64")).toBe(assignment);
     expect((await resolveCachedAgentTaskRecovery("large-0", 200, async () => {
       requests += 1;
       return assignment;
     }))?.length).toBe(assignment.length);
-    expect(requests).toBe(6);
+    expect(requests).toBe(66);
   });
 });

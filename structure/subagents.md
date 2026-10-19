@@ -188,6 +188,14 @@ Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent
 
 ## Multipart encrypted task recovery
 
+`src/server/responses/agent-task-recovery-cache.ts` retains recovered plaintext only in memory,
+with a 24-hour idle lifetime. Admitted recovery and history-replay hits renew that deadline
+and LRU position without another upstream request. The cache holds at most 128 MiB and the
+configured entry count (2,000 by default, at most 10,000). Idle expiration, capacity eviction,
+credential rotation and process restart can still lose recovery history. This retention is
+independent of the provider's prompt-cache TTL. The cache and replay tests cover idle renewal,
+timer replacement, capacity bounds and stable Anthropic message prefixes across active days.
+
 `src/server/responses/agent-task-recovery.ts` admits at most 32 consecutive, individually complete
 Fernet-shaped parts with a combined 2 MiB ciphertext limit. Every encrypted slot must belong to
 that run. The existing credential admission precedes cache access; the cache key is a JSON-encoded
