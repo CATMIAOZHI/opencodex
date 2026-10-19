@@ -28,6 +28,7 @@ import {
   type ProviderEgressBinding,
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
+import { bindFullRequestCapture, observeFullRequestHttp } from "../../lib/request-capture-context";
 
 export { withUpstreamHttpVersion };
 
@@ -205,7 +206,7 @@ export function sendWithConnectionPolicy(
     && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
   (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
-  return physicalFetch(input, {
+  return observeFullRequestHttp(input, {
     ...init,
     ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
     headers,
@@ -214,7 +215,7 @@ export function sendWithConnectionPolicy(
     ...egressInit,
     ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
     ...{ [UPSTREAM_REWRITTEN]: true },
-  });
+  }, finalInit => physicalFetch(input, finalInit));
 }
 
 export interface ProviderFetchOptions {
@@ -326,7 +327,7 @@ export function providerFetch(
   // ChatGPT Codex backend: streaming turns ride the responses_websockets
   // transport (measured ~3s faster TTFT than the SSE POST queue); everything
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
-  const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+  const unpaced = bindFullRequestCapture(async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     const upstreamWebsocket = provider.upstreamWebsocket;
     if (!options.httpOnly && typeof input === "string" && init
       && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
@@ -359,7 +360,7 @@ export function providerFetch(
         async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce);
     }
     return httpFetch(input, init);
-  };
+  });
   let pacingSlotAcquired = options.pacingSlotAcquired === true;
   const waitForPacing = async (signal?: AbortSignal): Promise<ProviderRequestSlot | undefined> => {
     if (pacingSlotAcquired) {

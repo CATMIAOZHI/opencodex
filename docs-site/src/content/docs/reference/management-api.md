@@ -316,7 +316,7 @@ timing method unknown)** and a visible explanation of the timing method when a r
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/logs` | Query filtered in-memory request logs | — |
-| `GET, PUT /api/debug` | Read debug flags; set, clear, or reset capture categories | 400 invalid or empty update |
+| `GET, PUT /api/debug` | Read debug flags; set, clear, or reset capture categories. The fork's `requests` boolean controls [full local request capture](/reference/full-request-capture/), off by default; bodies are not exported by this API. | 400 invalid or empty update |
 | `GET /api/debug/logs` | Read bounded provider/debug log entries | — |
 | `GET /api/debug/usage-logs` | Read bounded usage-debug entries | — |
 | `GET /api/debug/injection-logs` | Read bounded guidance-injection debug entries | — |

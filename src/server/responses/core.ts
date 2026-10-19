@@ -28,16 +28,15 @@ import { deliverAdapterResponse } from "./adapter-delivery";
 import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { runWithCompactionRecovery } from "./compaction-recovery";
-/**
- * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
- * wire, image/web-search bridges, and the terminal-guard continuation.
- */
+import { withFullRequestCapture } from "../../usage/full-request-capture";
+/** Route `/v1/responses` through recovery, adapters, sidecars and continuation. */
 export async function handleResponses(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
   options: HandleResponsesOptions = {},
 ): Promise<Response> {
+  return withFullRequestCapture(logCtx, async () => {
   const ownsBudget = options.translatorBudget === undefined;
   const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
   const abortSignal = options.abortSignal ?? req.signal;
@@ -73,6 +72,7 @@ export async function handleResponses(
   } finally {
     if (!options.comboInitialSend?.producerOwned) options.comboInitialSend?.permit.release();
   }
+  });
 }
 export async function handleComboResponses(
   req: Request,

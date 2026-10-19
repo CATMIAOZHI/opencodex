@@ -183,6 +183,13 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
     details: ["Run acceptance is not completion; inspect storage policy show for job state."],
   },
   {
+    command: ["debug", "requests"], summary: "Read or change full local request capture.",
+    usage: "ocx debug requests [status|on|off|reset]",
+    routes: [{"method": "GET", "path": "/api/debug"}, {"method": "PUT", "path": "/api/debug"}],
+    flags: [], mutates: true, json: "none",
+    details: ["Complete Responses ingress and HTTP egress bodies in local request-captures; no dashboard body export. Off by default; no automatic deletion. Status reads; on/off/reset change the runtime override."],
+  },
+  {
     command: ["debug", "provider"], summary: "Read or change the provider debug override.",
     usage: "ocx debug provider [status|on|off|reset]",
     routes: [{"method": "GET", "path": "/api/debug"}, {"method": "PUT", "path": "/api/debug"}],

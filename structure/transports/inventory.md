@@ -1,5 +1,14 @@
 # Transport Inventory
 
+The fork's opt-in `src/usage/full-request-capture.ts` records decoded Responses
+ingress before normalization and final HTTP dispatches at
+`src/server/responses/fetch-helpers.ts`, including rebuilt/retried bodies.
+Nested dispatch wrappers share a send marker; parallel logical requests retain
+separate directories. `src/bridge/sse.ts` binds capture context across lazy pulls.
+WebSocket upstream frames and native Messages/Chat ingress are not captured.
+Background writes do not delay physical sends or response headers; see the
+[diagnostic storage contract](../dashboard-and-usage.md#ux-boundary).
+
 Meta Muse's registry-owned compatibility User-Agent takes precedence over an incoming client User-Agent; explicit provider headers still win. See the [Muse provider contract](../providers-and-adapters.md).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.

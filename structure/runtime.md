@@ -1,12 +1,12 @@
 # Runtime
 
+The fork's `ocx debug requests` switch controls optional complete request files without restarting; `OPENCODEX_FULL_REQUEST_DEBUG=1` is the startup default. The [capture storage contract](dashboard-and-usage.md#ux-boundary) keeps disk writes off model deadlines.
+
 The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Codex control-plane ids are defined in the dependency-free `src/codex/control-plane-models.ts`; `src/router.ts` routes these exact ids unchanged to canonical OpenAI, retaining the existing error when no OpenAI provider is enabled. They do not widen the public native roster. Catalog requests and scheduled source refreshes follow the [nonblocking catalog observation contract](catalog.md#shared-catalog). Async runtime persistence rejects observed selection/epoch changes and returns detached frozen results; bounded exec rejects promptly and releases output readers on deadline or abort, independently awaits actual child exit, and escalates SIGTERM to SIGKILL after the shared 2-second grace (Windows termination is forceful).
 
 ## Bun runtime and test runner
 
-`package.json` pins the shipped npm runtime (`dependencies.bun`) to 1.4.2 and the test runner (`testRunnerBun`) to 1.4.0; `@types/bun` remains unchanged. Runtime 1.4.2 fixes #6684's Windows Bun.fetch truncation after the first cleartext upstream body chunk.
-The runner pin avoids 1.4.2's multi-file `bun test --isolate` preload reload segfault (`load_preloads -> JSModuleLoader::loadModule -> JSPromise::status`, address 0x10): #4064 introduced 1.4.2 on 2026-09-09 and #4821 reverted it on 2026-09-17.
-#6713 run 37631558263 reproduces it on Linux 1/4, macOS 2/2 and Windows 9/9; single-file success does not prove the multi-file runner works.
+`package.json` pins the shipped npm runtime (`dependencies.bun`) to 1.4.2 and the test runner (`testRunnerBun`) to 1.4.0; `@types/bun` remains unchanged. Runtime 1.4.2 fixes #6684's Windows Bun.fetch truncation after the first cleartext upstream body chunk. The runner pin avoids 1.4.2's multi-file `bun test --isolate` preload reload segfault (`load_preloads -> JSModuleLoader::loadModule -> JSPromise::status`, address 0x10): #4064 introduced 1.4.2 on 2026-09-09 and #4821 reverted it on 2026-09-17. #6713 run 37631558263 reproduces it on Linux 1/4, macOS 2/2 and Windows 9/9; single-file success does not prove the multi-file runner works.
 
 `.github/actions/setup-project-bun/action.yml` defaults to role `runtime` (`dependencies.bun`); `test-runner` resolves `testRunnerBun`. Unknown roles and missing or invalid pins fail closed. `.github/workflows/ci.yml` verifies both resolved and installed versions in `setup-action`; `tests/ci-workflows/ci-scope-gaps.test.ts` guards job roles.
 Test jobs, including single-file development-version validation, select `test-runner`. They also build dashboard fixtures; `gates` uploads a dashboard preview and checks release-helper syntax on that pin.

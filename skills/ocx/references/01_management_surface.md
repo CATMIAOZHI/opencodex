@@ -30,7 +30,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [accounts](01_surface_accounts.md) | 40 |
 | [agents-routing](01_surface_agents-routing.md) | 50 |
 | [integrations](01_surface_integrations.md) | 41 |
-| [observe-system](01_surface_observe-system.md) | 92 |
+| [observe-system](01_surface_observe-system.md) | 93 |
 | [access-remote](01_surface_access-remote.md) | 28 |
 | [lab](01_surface_lab.md) | 21 |
 
@@ -987,6 +987,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_observe-system.md#ocx-storage-policy-run)
 
+### `ocx debug requests`
+
+[State-changing task](01_surface_observe-system.md#ocx-debug-requests)
+
 ### `ocx debug provider`
 
 [State-changing task](01_surface_observe-system.md#ocx-debug-provider)
@@ -1373,6 +1377,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 331
-- of those, state-changing: 200
+- declared capabilities: 332
+- of those, state-changing: 201
 - head-resolved invocations: 2

@@ -1,13 +1,13 @@
 # Dashboard Surfaces And Usage
 
-Dashboard page contracts, usage accounting and request metrics, and the management settings that
-back individual dashboard surfaces. Serving, authentication boundaries, and `/api/*` ownership are
-in [GUI and management API](gui-and-management-api.md).
+Dashboard page contracts, usage accounting and request metrics, and the management settings that back individual dashboard surfaces. Serving, authentication boundaries, and `/api/*` ownership are in [GUI and management API](gui-and-management-api.md).
 
 ## UX boundary
 
-The dashboard is a local control surface, not a separate service. It should reflect the same config
-and catalog invariants documented in this folder rather than inventing parallel state.
+The opt-in full-body diagnostic in `src/usage/full-request-capture.ts` writes only to `request-captures` under the configuration home. `requests` in `/api/debug` controls it, but no body-reading endpoint is registered. Complete decoded ingress and serialized HTTP egress files retain prompt/media content; credential headers carry process-local equality tags.
+Result records join normal cache usage by request ID. A 64-job / 512 MiB payload queue bounds logging retention and keeps filesystem latency out of model deadlines; dropped/failed records warn, successful files publish atomically, and disk retention is manual. Stream pulls explicitly retain their capture scope.
+
+The dashboard is a local control surface, not a separate service. It should reflect the same config and catalog invariants documented in this folder rather than inventing parallel state.
 
 Codex quota cards consume the display cache from `src/codex/quota.ts`. A partial refresh
 removes an omitted short tuple whose reset deadline has elapsed, so a stale model-derived

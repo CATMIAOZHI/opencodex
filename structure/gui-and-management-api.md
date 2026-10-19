@@ -1,8 +1,8 @@
 # GUI And Management API
 
-Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
-`autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
-`PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;
+The runtime debug DTO includes `requests` for optional full local request capture. `/api/debug` accepts strict booleans and scoped reset `"requests"`; it never serves captured bodies. See the [capture storage contract](dashboard-and-usage.md#ux-boundary).
+
+Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null), `autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated `PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;
 explicit null restores inheritance and missing/invalid values fail. Other providers are rejected.
 `src/server/management/anthropic-account-threshold.ts` validates; the auth store serializes writes.
 CLI `ocx account auto-switch anthropic` requires `--account <id>` with status, inherit, on, off or

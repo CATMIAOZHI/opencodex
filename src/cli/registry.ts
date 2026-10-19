@@ -215,11 +215,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "debug",
-    usage: "ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>",
+    usage: "ocx debug <provider|usage|injection|claude|requests> <on|off|status|reset|logs [-f]>",
     summary: "Show or toggle runtime provider, usage, injection, and Claude debug capture.",
     details: [
       "Provider: ocx debug provider on | off | status | reset | logs [-f]",
       "Usage JSONL: ocx debug usage on | off | status | reset | logs [-f]",
+      "Full local request bodies: ocx debug requests on | off | status | reset (no logs stream)",
       "Env default: OCX_DEBUG=1 (legacy OCX_DEBUG_FRAMES still works)",
     ],
   },

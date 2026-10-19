@@ -1,5 +1,9 @@
 # CLI management and discovery
 
+`ocx debug requests on|off|status|reset` manages the full local request recorder
+through `/api/debug`. It has no `logs` stream: bodies are local files only, as
+defined in the [capture storage contract](dashboard-and-usage.md#ux-boundary).
+
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
 ## CLI readiness diagnostics

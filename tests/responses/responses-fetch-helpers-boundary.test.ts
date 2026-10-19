@@ -184,6 +184,8 @@ describe("Responses fetch-helper import boundary", () => {
       "../../lib/provider-tls-profile",
       "../../lib/proxy-env",
       "../../lib/redact",
+      // Content-free transport slot; the optional writer installs from the Responses owner.
+      "../../lib/request-capture-context",
       "../../lib/upstream-http-version",
       // Import-free plugin rewrite slot (src/plugins/upstream-hooks.ts).
       "../../plugins/upstream-hooks",

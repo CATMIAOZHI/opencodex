@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { managementFetch as fetch } from "../helpers/management-auth";
-import { mkdtempSync} from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
@@ -14,6 +14,7 @@ import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { RETAINED_TRUNCATION_MARKER, retainedUtf8Bytes } from "../../src/lib/admission";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { flushFullRequestCapturesForTests } from "../../src/usage/full-request-capture";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -63,6 +64,64 @@ afterEach(() => {
 });
 
 describe("management API /api/debug", () => {
+  test("full request capture is off by default and can be toggled without restart", async () => {
+    const server = startServer(0);
+    try {
+      expect((await (await fetch(new URL("/api/debug", server.url))).json()).requests).toBe(false);
+      for (const requests of [true, false]) {
+        const response = await fetch(new URL("/api/debug", server.url), {
+          method: "PUT", body: JSON.stringify({ requests }),
+        });
+        expect(response.status).toBe(200);
+        expect((await response.json()).requests).toBe(requests);
+      }
+    } finally { await server.stop(true); }
+  });
+  test("Responses to Claude captures actual normalized HTTP body and joins final cache usage", async () => {
+    let actualBody = "";
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      async fetch(req) {
+        actualBody = await req.text();
+        return Response.json({
+          id: "msg_capture_test", type: "message", role: "assistant", model: "claude-opus-5-5",
+          content: [{ type: "text", text: "offline answer" }], stop_reason: "end_turn",
+          usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 200,
+            cache_creation_input_tokens: 300, cache_creation: { ephemeral_1h_input_tokens: 300, ephemeral_5m_input_tokens: 0 } },
+        });
+      },
+    });
+    saveConfig({
+      ...baseConfig(), defaultProvider: "capture-test", cacheRetention: "long",
+      providers: { "capture-test": { adapter: "anthropic", authMode: "key", apiKey: "offline-dummy",
+        allowPrivateNetwork: true, baseUrl: `http://127.0.0.1:${upstream.port}` } },
+    });
+    setDebugSettings({ requests: true });
+    const server = startServer(0);
+    try {
+      const original = '{ "model": "capture-test/claude-opus-5-5", "input": "offline capture test", "stream": false }';
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" }, body: original,
+      });
+      const responseText = await response.text();
+      expect(response.status, responseText).toBe(200);
+      await flushFullRequestCapturesForTests();
+      const root = join(testDir, "request-captures");
+      const dirs = readdirSync(root);
+      expect(dirs).toHaveLength(1);
+      const dir = join(root, dirs[0]!);
+      const files = readdirSync(dir);
+      expect(readFileSync(join(dir, "0001-inbound.json"), "utf8")).toBe(original);
+      expect(readFileSync(join(dir, "0002-outbound.json"), "utf8")).toBe(actualBody);
+      const result = JSON.parse(readFileSync(join(dir, files.find(name => /^result-.*\.json$/.test(name))!), "utf8"));
+      expect(result.usage).toMatchObject({ cacheReadInputTokens: 200, cacheCreation1hInputTokens: 300 });
+      expect(result.requestId).toMatch(/^ocx-/);
+    } finally {
+      await server.stop(true);
+      await upstream.stop(true);
+      await flushFullRequestCapturesForTests();
+    }
+  });
   test("GET returns provider + usage debug view", async () => {
     const server = startServer(0);
     try {

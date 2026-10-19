@@ -2,7 +2,7 @@ import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
 import { DEBUG_ENV, type DebugSettingsView } from "../lib/debug-settings";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
 
-type DebugScope = "provider" | "usage" | "injection" | "claude";
+type DebugScope = "provider" | "usage" | "injection" | "claude" | "requests";
 
 async function requireLiveProxy() {
   const live = await findLiveProxy();
@@ -46,7 +46,11 @@ async function putDebugSettings(body: Record<string, unknown>): Promise<DebugSet
 }
 
 function printScopeStatus(scope: DebugScope, view: DebugSettingsView): void {
-  if (scope === "provider") {
+  if (scope === "requests") {
+    console.log(`Full request capture: ${view.requests ? "ON" : "off"}`);
+    console.log("  Local files: $OPENCODEX_HOME/request-captures (default ~/.opencodex/request-captures)");
+    console.log("  Complete prompt/image bodies; credentials in headers are masked. No automatic deletion.");
+  } else if (scope === "provider") {
     console.log(`Provider debug: ${view.enabled ? "ON" : "off"}`);
     console.log(`  env=${view.env.debug ? "on" : "off"}, runtime=${view.runtimeOverride.debug === undefined ? "env/default" : view.runtimeOverride.debug ? "on" : "off"}`);
     console.log("  Tail: ocx debug provider logs [-f]");
@@ -149,7 +153,7 @@ async function handleScopeCommand(scope: DebugScope, actionArgv: string[]): Prom
     const body = scope === "provider" ? { debug: enabled }
       : scope === "usage" ? { usage: enabled }
         : scope === "injection" ? { injection: enabled }
-          : { claude: enabled };
+          : scope === "requests" ? { requests: enabled } : { claude: enabled };
     printScopeStatus(scope, await putDebugSettings(body));
     console.log(`\n${scope} debug is now ${enabled ? "enabled" : "disabled"}.`);
     return;
@@ -168,6 +172,10 @@ async function handleScopeCommand(scope: DebugScope, actionArgv: string[]): Prom
   }
 
   if (action === "logs") {
+    if (scope === "requests") {
+      console.error("Full request bodies are local files only; inspect the request-captures directory.");
+      process.exit(1);
+    }
     if (scope === "injection" || scope === "claude") {
       console.error(scope === "claude"
         ? "Use: ocx observe claude-inbound"
@@ -180,7 +188,7 @@ async function handleScopeCommand(scope: DebugScope, actionArgv: string[]): Prom
     return;
   }
 
-  console.error(scope === "injection" || scope === "claude"
+  console.error(scope === "injection" || scope === "claude" || scope === "requests"
     ? `Usage: ocx debug ${scope} on|off|status|reset`
     : `Usage: ocx debug ${scope} on|off|status|reset|logs [-f]`);
   process.exit(1);
@@ -193,18 +201,20 @@ function printTopLevelHelp(): void {
   console.log("  ocx debug usage on|off|status|reset|logs [-f]");
   console.log("  ocx debug injection on|off|status|reset");
   console.log("  ocx debug claude on|off|status|reset");
+  console.log("  ocx debug requests on|off|status|reset");
   console.log("");
   console.log("Env defaults on start:");
   console.log("  provider → OCX_DEBUG=1 (legacy OCX_DEBUG_FRAMES still works)");
   console.log(`  usage    → ${DEBUG_ENV.usage}=1`);
   console.log(`  injection→ ${DEBUG_ENV.injection}=1`);
   console.log(`  claude   → ${DEBUG_ENV.claude}=1`);
+  console.log(`  requests → ${DEBUG_ENV.requests}=1`);
 }
 
 export async function handleDebugCommand(argv: string[]): Promise<void> {
   const sub = (argv[0] ?? "").trim().toLowerCase();
 
-  if (sub === "provider" || sub === "usage" || sub === "injection" || sub === "claude") {
+  if (sub === "provider" || sub === "usage" || sub === "injection" || sub === "claude" || sub === "requests") {
     await handleScopeCommand(sub, argv.slice(1));
     return;
   }
