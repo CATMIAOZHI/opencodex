@@ -43,6 +43,12 @@ Header credentials and other non-allowlisted headers are replaced with equality
 tags valid only within the current proxy process; the host and URL query are not
 recorded. Prompt bodies themselves are not redacted.
 
+When diagnosing Claude requests with GPT subagents, compare the historical
+`thinking` blocks too. Reasoning replay uses each request's own `thread-id`
+before the parent thread, so a subagent's model change does not invalidate the
+parent's thinking history. A model or account change within the same thread
+still applies the normal foreign-reasoning protection.
+
 ## Scope and storage
 
 This captures requests handled by the Responses pipeline and its final HTTP
