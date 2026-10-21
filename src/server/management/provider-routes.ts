@@ -71,7 +71,7 @@ import {
 } from "../../providers/model-discovery";
 import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
+import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReportsBounded } from "../../providers/quota";
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
@@ -884,7 +884,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
   if (url.pathname === "/api/provider-quotas" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
-    const snapshot = await fetchProviderQuotaReports(config, forceRefresh);
+    const snapshot = await fetchProviderQuotaReportsBounded(config, forceRefresh);
     const now = Date.now();
     return jsonResponse({
       ...snapshot,

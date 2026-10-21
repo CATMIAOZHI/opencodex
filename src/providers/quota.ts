@@ -98,6 +98,100 @@ export {
 } from "./quota/account-cache";
 export { fetchAntigravityUsageQuota, isCanonicalAntigravityQuotaUrl, setAntigravityAccountQuotaTransportForTests } from "./quota/antigravity";
 export { parseOllamaCloudBalance, parseOllamaCloudQuota, parseZaiQuotaLimits, providerApiKeyQuotaMode } from "./quota/vendor-probes-key";
+/**
+ * Upper bound for one provider's quota probe inside a dashboard fan-out.
+ *
+ * A probe can chain several requests (token refresh, then a retry), so the per-request
+ * timeout alone does not bound it. The dashboard aborts `/api/provider-quotas` at 20s;
+ * a stalled provider kept the whole response open past that and every other row was lost
+ * with it. A probe that exceeds this budget reports `null`, which preserves the last-good
+ * row exactly as a transient probe failure does today.
+ */
+export const PROVIDER_QUOTA_PROBE_DEADLINE_MS = 12_000;
+let providerQuotaProbeDeadlineMs = PROVIDER_QUOTA_PROBE_DEADLINE_MS;
+
+/** Test seam: shrink the probe budget so a stalled fetch completes inside a test. */
+export function setProviderQuotaProbeDeadlineForTests(ms: number): void {
+  providerQuotaProbeDeadlineMs = ms;
+}
+
+export function resetProviderQuotaProbeDeadlineForTests(): void {
+  providerQuotaProbeDeadlineMs = PROVIDER_QUOTA_PROBE_DEADLINE_MS;
+}
+
+/**
+ * Bound for the whole dashboard fan-out, including the Codex pool snapshot read that happens
+ * before any probe starts. The dashboard aborts `/api/provider-quotas` at 20s, so a stalled
+ * snapshot or a chained probe must not own that budget and turn every row into a client error.
+ */
+export const PROVIDER_QUOTA_RESPONSE_DEADLINE_MS = 15_000;
+let providerQuotaResponseDeadlineMs = PROVIDER_QUOTA_RESPONSE_DEADLINE_MS;
+
+export function setProviderQuotaResponseDeadlineForTests(ms: number): void {
+  providerQuotaResponseDeadlineMs = ms;
+}
+
+export function resetProviderQuotaResponseDeadlineForTests(): void {
+  providerQuotaResponseDeadlineMs = PROVIDER_QUOTA_RESPONSE_DEADLINE_MS;
+}
+
+async function boundedQuotaProbe(
+  probe: Promise<ProviderQuotaProbeResult>,
+  deadlineMs: number,
+): Promise<ProviderQuotaProbeResult> {
+  if (!(deadlineMs > 0)) return probe;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<ProviderQuotaProbeResult>(resolve => {
+    timer = setTimeout(() => resolve(null), deadlineMs);
+    (timer as unknown as { unref?: () => void }).unref?.();
+  });
+  try {
+    return await Promise.race([probe, expired]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** Last published rows for providers this config still has, so a timeout never invents a row. */
+function lastGoodProviderQuotaResponse(config: OcxConfig): ProviderQuotaResponse {
+  const live = new Set(
+    Object.entries(config.providers)
+      .filter(([, provider]) => provider.disabled !== true)
+      .map(([name]) => name),
+  );
+  return {
+    generatedAt: Date.now(),
+    reports: (getProviderQuotaReportCache()?.response.reports ?? [])
+      .filter(report => live.has(report.provider)),
+  };
+}
+
+/**
+ * Dashboard entry point for `/api/provider-quotas`.
+ *
+ * Answers within the deadline. A fan-out still running when the deadline fires keeps working
+ * in the background and commits to the report cache, so the next poll sees fresh rows; this
+ * response serves the last-good rows instead of failing the whole page.
+ */
+export async function fetchProviderQuotaReportsBounded(
+  config: OcxConfig,
+  forceRefresh = false,
+  deadlineMs = providerQuotaResponseDeadlineMs,
+): Promise<ProviderQuotaResponse> {
+  const fanOut = fetchProviderQuotaReports(config, forceRefresh).catch(() => null);
+  if (!(deadlineMs > 0)) return (await fanOut) ?? lastGoodProviderQuotaResponse(config);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<null>(resolve => {
+    timer = setTimeout(() => resolve(null), deadlineMs);
+    (timer as unknown as { unref?: () => void }).unref?.();
+  });
+  try {
+    return (await Promise.race([fanOut, expired])) ?? lastGoodProviderQuotaResponse(config);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export { parseXaiCreditsResponse } from "./quota/vendor-probes-oauth";
 export async function fetchProviderApiKeyQuotas(config: OcxConfig, name: string, forceRefresh = false): Promise<ProviderApiKeyQuota[]> {
   const provider = config.providers[name];
@@ -262,7 +356,10 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     const previous = previousCache && previousCache.key === key ? previousCache.response.reports : [];
     const probeResults = await Promise.all(
       Object.entries(config.providers).map(([name, provider]) => (
-        maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
+        boundedQuotaProbe(
+          maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot),
+          providerQuotaProbeDeadlineMs,
+        )
       )),
     );
     const fresh = probeResults.filter((item): item is ProviderQuotaReport => (
