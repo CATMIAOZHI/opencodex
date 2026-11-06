@@ -416,7 +416,7 @@ bases produce no probe; redirect refusal and quota parsing/cache semantics are u
 > Decision record: [ADR-0096](decisions/ADR-0096-z-ai-quota-destination-ownership.md)
 
 ## Provider debug logging
-
+The fork's opt-in full-request capture (`src/usage/full-request-capture.ts`, context in `src/lib/request-capture-context.ts`) writes decoded inbound and final serialized outbound requests to owner-only local files, with credential headers removed. `ocx debug requests on|off` persists the flag across restarts; it defaults off and must be deliberately enabled. It is separate from buffered provider logs and may contain conversation content. Dashboard quota reads use `src/providers/quota/deadline.ts` to bound each probe to 12 seconds and the full response to 15 seconds while retaining last-good rows; underlying work can finish into the cache.
 Provider transport diagnostics (dropped SSE frames, adapter dial/stream events, etc.) are opt-in:
 `ocx debug provider on` / `ocx debug provider off` on the running proxy, the Debug-page toggle, or `OCX_DEBUG=1` on
 the next start (legacy `OCX_DEBUG_FRAMES` still enables the same path). Lines

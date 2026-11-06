@@ -66,8 +66,8 @@ Authorization: Bearer <admin-token>
 | `POST /api/grok/apply` | 관리형 동기화를 통해 영속화된 Grok 구성을 적용합니다 | 409 `grok_apply_busy`; 400/500 적용 실패 |
 | `GET /api/grok/reset-coupons?accountId=...` | 활성 또는 지정된 xAI 계정의 남은 Grok billing reset 토큰과 유효 기간을 읽습니다 | 400 누락된 account; 401 인증되지 않음; 502 upstream gRPC-Web 오류 |
 | `POST /api/grok/reset-coupons/consume` | 사용할 수 있는 reset coupon을 교환합니다. 본문은 `{ accountId?, tokenId?, operationId? }`. 선택적 `operationId`(UUIDv4)는 교환을 멱등하게 만듭니다 — 같은 id를 반복하면 이중 교환 없이 저장된 결과를 재생합니다. | 400 잘못된 JSON/UUID; 401 인증되지 않음; 409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`; 502 upstream 오류; 503 ledger 용량 / `ledger_unavailable`; 500 `attempt_mark_failed` |
-| `GET /api/anthropic/reset-grants?accountId=...` | Anthropic OAuth 계정 하나의 Claude 사용량 리셋 grant를 읽습니다. 사용 가능 여부, grant별 남은 리셋 수와 유효 기간, 초기화하는 한도, 아직 다시 보낼 수 있는 미확인 시도를 함께 돌려줍니다 | 400 일치하는 계정 없음; 401 재로그인 필요; 502 upstream 응답 없음 |
-| `POST /api/anthropic/reset-grants/consume` | 리셋 grant 하나를 사용합니다. 본문은 `{ accountId, grantId, operationId }`이고, `operationId`(UUIDv4)는 upstream 요청 ID로 그대로 전송되므로 같은 값을 다시 보내면 같은 요청을 재시도합니다. 대시보드 세션이 필요합니다. | 400 잘못된 본문; 401 재로그인 필요; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 저널 사용 중, 열 수 없음, 또는 가득 참 |
+| `GET /api/anthropic/reset-grants?accountId=...` | Anthropic OAuth 계정 하나의 Claude 사용량 리셋 grant를 읽습니다. 사용 가능 여부, grant별 남은 리셋 수와 유효 기간, 초기화하는 한도, 아직 다시 보낼 수 있는 미확인 시도를 함께 돌려줍니다. `juniper_tide` grant는 5시간 한도만 초기화하며 일주일에 한 번만 제공됩니다 | 400 일치하는 계정 없음; 401 재로그인 필요; 502 upstream 응답 없음 |
+| `POST /api/anthropic/reset-grants/consume` | 리셋 grant 하나를 사용합니다. 본문은 `{ accountId, grantId, operationId }`이고, `cedar_ember` grant에서는 `operationId`(UUIDv4)가 upstream 요청 ID로 그대로 전송되므로 같은 값을 다시 보내면 같은 요청을 재시도하며, `juniper_tide` 요청은 program만 전송합니다. 대시보드 세션이 필요합니다. | 400 잘못된 본문; 401 재로그인 필요; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 저널 사용 중, 열 수 없음, 또는 가득 참 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop 라우팅/네이티브 프로필을 읽거나 저장합니다 | 400 잘못되었거나 사용할 수 없는 할당 |
 | `POST /api/claude-desktop/apply` | 저장된 프로필을 Claude Desktop의 관리형 구성에 기록합니다 | 400/500 기록 실패 |
 | `GET /api/claude-desktop/status` | 저장된 프로필과 적용된 프로필, Desktop 상태를 확인합니다 | 400 상태 읽기 실패 |
@@ -83,8 +83,8 @@ Authorization: Bearer <admin-token>
 
 Claude 사용량 리셋도 **Providers > Anthropic > Accounts**에서 같은 방식으로 씁니다. 로그인한
 계정 행마다 남은 리셋 수를 보여 주는 티켓 배지가 붙고, 대화상자에서 한 번 더 확인하면 리셋
-하나를 사용합니다. 리셋은 5시간 한도와 주간 한도를 다시 채우며 주간 리셋 요일은 바꾸지
-않습니다. 요청이 응답하지 않으면 대화상자는 `operationId`를 그대로 들고 있다가 10분 동안 같은
+하나를 사용합니다. `cedar_ember` 리셋은 주간 리셋 요일을 바꾸지 않고 5시간 한도와 주간 한도를
+다시 채우며, `juniper_tide` 리셋은 5시간 한도만 다시 채웁니다(일주일에 한 번까지 제공). 요청이 응답하지 않으면 대화상자는 `operationId`를 그대로 들고 있다가 10분 동안 같은
 ID로 다시 보내기를 제안합니다. Claude Code 클라이언트도 이렇게 복구하며, 그동안 같은 grant에
 대한 새 작업은 거부됩니다. 사용은 대시보드에서만 가능하며 관리자 토큰만으로는
 `403 session_required`가 돌아옵니다.

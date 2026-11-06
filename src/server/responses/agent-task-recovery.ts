@@ -6,6 +6,7 @@ import { isTransientUpstreamStatus, retryBackoffDelayMs, sleepWithAbort } from "
 import { isApiAuthRequired, isProxyAdmissionSecret } from "../auth-cors";
 import { MAX_AGENT_TASK_CIPHERTEXT_BYTES, MAX_AGENT_TASK_ENCRYPTED_PARTS, structurallyValidFernetTokens } from "./encrypted-payload";
 import {
+  DEFAULT_RECOVERY_CACHE_ENTRIES,
   cachedAgentTaskRecovery,
   discardCachedAgentTaskRecovery,
   resetAgentTaskRecoveryCache,
@@ -72,8 +73,8 @@ export function agentTaskRecoveryConfig(config: OcxConfig): AgentTaskRecoveryOpt
       ? Math.min(120_000, Math.floor(raw.timeoutMs!))
       : 45_000,
     cacheEntries: Number.isFinite(raw.cacheEntries) && (raw.cacheEntries ?? 0) >= 1
-      ? Math.min(512, Math.floor(raw.cacheEntries!))
-      : 200,
+      ? Math.min(10_000, Math.floor(raw.cacheEntries!))
+      : DEFAULT_RECOVERY_CACHE_ENTRIES,
     retries: Number.isFinite(raw.retries) && (raw.retries ?? 0) >= 0
       ? Math.min(MAX_RECOVERY_RETRIES, Math.floor(raw.retries!))
       : 0,
@@ -595,7 +596,7 @@ export async function recoverEncryptedAgentTaskWithResult(
   const { admission, cacheKey, envelope } = admitted.recovery;
   const result = await resolveCachedAgentTaskRecoveryWithResult(
     cacheKey,
-    options.cacheEntries ?? 200,
+    options.cacheEntries ?? DEFAULT_RECOVERY_CACHE_ENTRIES,
     signal => requestRecovery(admission, envelope, options, signal),
     context.abortSignal,
   );

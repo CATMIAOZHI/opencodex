@@ -5,6 +5,7 @@ import { createGoogleAdapter } from "../../src/adapters/google";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import {
   TRANSLATOR_MAX_CALL_ARGUMENT_BYTES,
+  TRANSLATOR_MAX_SSE_EVENT_BYTES,
   TRANSLATOR_MAX_TURN_BYTES,
   createTranslatorBudget,
   releaseTranslatedEvent,
@@ -133,7 +134,7 @@ describe("translator budget", () => {
     }
   });
 
-  test("one one-shot tool call admits exactly 2 MiB and rejects one byte over", () => {
+  test("one one-shot tool call admits exactly one call-argument cap and rejects one byte over", () => {
     const exact = createTranslatorBudget();
     exact.openCall("call");
     exact.chargeRetained(TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, { kind: "tool_args", callId: "call" });
@@ -145,7 +146,7 @@ describe("translator budget", () => {
     over.dispose();
   });
 
-  test("a fragmented tool call through the OpenAI adapter admits exactly 2 MiB and rejects one byte over", async () => {
+  test("a fragmented tool call through the OpenAI adapter admits exactly one call-argument cap and rejects one byte over", async () => {
     const adapter = createOpenAIChatAdapter({
       adapter: "openai-chat",
       baseUrl: "https://example.test/v1",
@@ -206,7 +207,9 @@ describe("translator budget", () => {
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "x" } }] } }] },
       { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
     ].map(value => `data: ${JSON.stringify(value)}\n\n`).join("") + "data: [DONE]\n\n";
-    const budget = createTranslatorBudget();
+    // Pinned explicitly: the scenario is "retained state leaves less than one argument
+    // fragment of headroom", which the production turn cap now sits far above.
+    const budget = createTranslatorBudget({ maxTurnBytes: 32 * 1024 * 1024 });
     budget.chargeRetained(31 * 1024 * 1024, { kind: "retained_collectors" });
     const events: AdapterEvent[] = [];
     try {
@@ -235,7 +238,7 @@ describe("translator budget", () => {
     budget.dispose();
   });
 
-  test("standalone aggregate translator bytes admit exactly 32 MiB and fail one byte over", () => {
+  test("standalone aggregate translator bytes admit exactly one turn cap and fail one byte over", () => {
     const budget = createTranslatorBudget();
     budget.chargeRetained(TRANSLATOR_MAX_TURN_BYTES, { kind: "retained_collectors" });
     expect(budget.snapshot().currentBytes).toBe(TRANSLATOR_MAX_TURN_BYTES);
@@ -383,3 +386,21 @@ test("production adapter contract rejects omitted translator budgets at typechec
   const valid = Bun.spawnSync(["bun", ...base, "tests/fixtures/translator-budget-required.valid.ts"]);
   expect(valid.exitCode).toBe(0);
 }, SPAWN_BUDGET_MS); // two real tsc child processes ARE the assertion; windows runner measured ~5.5s against Bun's 5s default.
+
+describe("fork-local translation ceilings", () => {
+  test("the turn cap keeps the worst-case request overlap at the front door size", async () => {
+    const { MAX_DECOMPRESSED_BODY_BYTES } = await import("../../src/server/request-decompress");
+    // A translated body costs four times its size before it reaches the wire: retained once as the
+    // translated internal body plus a transient reservation of three times while the UTF-16 string
+    // and the UTF-8 body coexist (src/server/claude-messages.ts). The cap has to stay above that
+    // worst case for a body the front door admits, or the raise is cosmetic for image-heavy turns.
+    expect(TRANSLATOR_MAX_TURN_BYTES).toBeGreaterThanOrEqual(4 * MAX_DECOMPRESSED_BODY_BYTES);
+  });
+
+  test("the per-record SSE guard stays reachable under the turn cap", () => {
+    // The decoder accounts about three times an event while the source line and the decoded value
+    // overlap, so the SSE limit must remain below the turn cap or it stops being the guard that
+    // fires first for a single oversized record.
+    expect(3 * TRANSLATOR_MAX_SSE_EVENT_BYTES).toBeLessThanOrEqual(TRANSLATOR_MAX_TURN_BYTES);
+  });
+});

@@ -7,6 +7,7 @@
  * Claude inbound capture: `ocx debug claude on|off|status|reset` (or OCX_CLAUDE_DEBUG=1) —
  * allowlist-scalar ring of inbound Anthropic request metadata, default OFF.
  * `/api/debug` and `ocx debug` override env defaults without restart.
+ * Full local bodies: `ocx debug requests on|off|status|reset` (OPENCODEX_FULL_REQUEST_DEBUG=1).
  */
 
 export const DEBUG_ENV = {
@@ -14,6 +15,7 @@ export const DEBUG_ENV = {
   usage: "OPENCODEX_USAGE_DEBUG",
   injection: "OCX_INJECTION_DEBUG",
   claude: "OCX_CLAUDE_DEBUG",
+  requests: "OPENCODEX_FULL_REQUEST_DEBUG",
 } as const;
 
 /** Legacy env var that still enables provider debug logging. */
@@ -26,6 +28,7 @@ export interface DebugSettingsView {
   usage: boolean;
   injection: boolean;
   claude: boolean;
+  requests: boolean;
   runtimeOverride: Partial<Record<DebugFlag, boolean>>;
   env: Record<DebugFlag, boolean>;
 }
@@ -67,24 +70,30 @@ export function isClaudeDebugEnabled(): boolean {
   return envFlag(DEBUG_ENV.claude);
 }
 
+export function isFullRequestDebugEnabled(): boolean {
+  return runtimeOverride.requests ?? envFlag(DEBUG_ENV.requests);
+}
+
 export function getDebugSettings(): DebugSettingsView {
   return {
     enabled: isDebugEnabled(),
     usage: isUsageDebugEnabled(),
     injection: isInjectionDebugEnabled(),
     claude: isClaudeDebugEnabled(),
+    requests: isFullRequestDebugEnabled(),
     runtimeOverride: { ...runtimeOverride },
     env: {
       debug: envFlag(DEBUG_ENV.debug) || legacyDebugEnvEnabled(),
       usage: envFlag(DEBUG_ENV.usage),
       injection: envFlag(DEBUG_ENV.injection),
       claude: envFlag(DEBUG_ENV.claude),
+      requests: envFlag(DEBUG_ENV.requests),
     },
   };
 }
 
 export function setDebugSettings(partial: Partial<Record<DebugFlag, boolean>>): DebugSettingsView {
-  for (const key of ["debug", "usage", "injection", "claude"] as const) {
+  for (const key of ["debug", "usage", "injection", "claude", "requests"] as const) {
     if (partial[key] !== undefined) runtimeOverride[key] = partial[key];
   }
   return getDebugSettings();
@@ -96,7 +105,7 @@ export function clearDebugSetting(flag: DebugFlag): DebugSettingsView {
 }
 
 export function clearDebugSettings(): DebugSettingsView {
-  for (const key of ["debug", "usage", "injection", "claude"] as const) {
+  for (const key of ["debug", "usage", "injection", "claude", "requests"] as const) {
     delete runtimeOverride[key];
   }
   return getDebugSettings();

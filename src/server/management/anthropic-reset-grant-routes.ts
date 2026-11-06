@@ -8,13 +8,20 @@ import { hasHumanDashboardSession } from "./consent-session";
  * Spending uses the user's own subscription benefit, so the POST requires the
  * dashboard session principal (AGENTS.md, "User-consent actions"); the admin token
  * alone is refused. Responses carry fixed codes and fixed messages only: no
- * upstream body, exception text, token, organization id, or email. Nothing here
- * logs. Lazy-loaded by `handleAnthropicResetGrantRoutesOnDemand` in
+ * upstream body, exception text, token, organization id, or email. Upstream text
+ * reaches the client only as grant labels (already sanitized by `safeLabel`) and as
+ * `juniperOffer.reason`, reduced by `anthropicJuniperOffer` to a short snake_case
+ * token. Nothing here logs.
+ * Lazy-loaded by `handleAnthropicResetGrantRoutesOnDemand` in
  * management-api.ts so the core request path never imports it.
  */
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
-import { getValidAccessSnapshotForAccount } from "../../oauth";
+import {
+  OAuthAccountPausedError,
+  OAuthLoginRequiredError,
+  getValidAccessSnapshotForAccount,
+} from "../../oauth";
 import { configuredAnthropicInstance, isAnthropicInstanceId, type AnthropicInstanceId } from "../../providers/anthropic-instance";
 import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent } from "../../oauth/anthropic-send-ownership";
 import { anthropicCooldownRecoveryFor } from "../../providers/quota/anthropic-cooldown-recovery";
@@ -30,6 +37,15 @@ import {
   fetchAnthropicOrganizationUuid,
   fetchAnthropicResetGrantStatus,
 } from "../../providers/anthropic-reset-grants";
+import {
+  ANTHROPIC_JUNIPER_GRANT_ID,
+  anthropicJuniperOffer,
+  claimAnthropicJuniperReset,
+  mergeAnthropicResetStatus,
+  readAnthropicJuniperStatus,
+  spendableAnthropicResetGrant,
+  type AnthropicJuniperOffer,
+} from "../../providers/anthropic-juniper-reset";
 import {
   AnthropicResetLedgerError,
   anthropicOrgDigest,
@@ -150,11 +166,19 @@ function resolveAccountId(deps: AnthropicResetGrantRouteDeps, requested: unknown
   return active && ids.includes(active) ? active : ids[0] ?? null;
 }
 
-async function tokenFor(deps: AnthropicResetGrantRouteDeps, accountId: string): Promise<string | null> {
+/**
+ * `retryable` means "come back in a moment", not "this login is dead". Only a missing
+ * login and an operator-paused account are definitive; a busy or lost refresh, a file
+ * lock, a network failure and a replaced row all clear up without signing in again.
+ */
+type TokenIssue = { token: string } | { retryable: boolean };
+
+async function tokenFor(deps: AnthropicResetGrantRouteDeps, accountId: string): Promise<TokenIssue> {
   try {
-    return await deps.accessTokenFor(accountId);
-  } catch {
-    return null;
+    const token = await deps.accessTokenFor(accountId);
+    return token ? { token } : { retryable: false };
+  } catch (error) {
+    return { retryable: !(error instanceof OAuthLoginRequiredError || error instanceof OAuthAccountPausedError) };
   }
 }
 
@@ -162,9 +186,12 @@ async function handleRead(ctx: ManagementContext, deps: AnthropicResetGrantRoute
   const receipt = { provider: deps.provider };
   const accountId = resolveAccountId(deps, ctx.url.searchParams.get("accountId") ?? undefined);
   if (!accountId) return fail(ctx, 400, "no_account", receipt);
-  const accessToken = await tokenFor(deps, accountId);
-  if (!accessToken) return fail(ctx, 401, "auth_failed", receipt);
+  const issued = await tokenFor(deps, accountId);
+  if ("retryable" in issued) {
+    return issued.retryable ? fail(ctx, 503, "upstream_unavailable", receipt) : fail(ctx, 401, "auth_failed", receipt);
+  }
   if (deps.isCurrent?.() === false) return fail(ctx, 401, "auth_failed", receipt);
+  const accessToken = issued.token;
   let status;
   try {
     status = await fetchAnthropicResetGrantStatus({ accessToken, fetchFn: deps.fetchFn });
@@ -172,6 +199,19 @@ async function handleRead(ctx: ManagementContext, deps: AnthropicResetGrantRoute
     return readFailure(ctx, error, receipt);
   }
   if (deps.isCurrent?.() === false) return fail(ctx, 401, "auth_failed", receipt);
+  // The juniper_tide (5-hour-only) offer rides on a second, separate upstream read.
+  // It is only worth asking for when cedar has nothing to spend, and it degrades to
+  // "no offer" on any transport failure, so an optional entitlement can never turn
+  // the cedar answer into an error.
+  let juniperOffer: AnthropicJuniperOffer | null = null;
+  if (!spendableAnthropicResetGrant(status)) {
+    const probe = await readAnthropicJuniperStatus({ accessToken, fetchFn: deps.fetchFn });
+    if (deps.isCurrent?.() === false) return fail(ctx, 401, "auth_failed", receipt);
+    status = mergeAnthropicResetStatus(status, probe);
+    // Beside the merged status, not inside it: `ineligibleReason` belongs to cedar
+    // and stays in its closed set, while this says why juniper withheld its ticket.
+    juniperOffer = anthropicJuniperOffer(probe);
+  }
   let pendingOperation = null;
   let journalAvailable = true;
   try {
@@ -179,7 +219,10 @@ async function handleRead(ctx: ManagementContext, deps: AnthropicResetGrantRoute
   } catch {
     journalAvailable = false;
   }
-  return jsonResponse({ provider: deps.provider, accountId, ...status, pendingOperation, journalAvailable }, 200, ctx.req, ctx.config);
+  return jsonResponse(
+    { provider: deps.provider, accountId, ...status, juniperOffer, pendingOperation, journalAvailable },
+    200, ctx.req, ctx.config,
+  );
 }
 
 async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGrantRouteDeps): Promise<Response> {
@@ -204,8 +247,12 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
   const accountId = resolveAccountId(deps, body.accountId);
   if (!accountId) return scopedFail(400, "no_account");
 
-  const accessToken = await tokenFor(deps, accountId);
-  if (!accessToken || deps.isCurrent?.() === false) return scopedFail(401, "auth_failed");
+  const issued = await tokenFor(deps, accountId);
+  if ("retryable" in issued) {
+    return issued.retryable ? scopedFail(503, "upstream_unavailable") : scopedFail(401, "auth_failed");
+  }
+  if (deps.isCurrent?.() === false) return scopedFail(401, "auth_failed");
+  const accessToken = issued.token;
   let organizationUuid: string;
   try {
     organizationUuid = await fetchAnthropicOrganizationUuid({ accessToken, fetchFn: deps.fetchFn });
@@ -238,6 +285,13 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
     let status;
     try {
       status = await fetchAnthropicResetGrantStatus({ accessToken, fetchFn: deps.fetchFn });
+      if (grantId === ANTHROPIC_JUNIPER_GRANT_ID) {
+        // The pre-spend gate must see the same offer the dashboard rendered, so the
+        // juniper grant reads the extra probe. A cedar grant keeps the single cedar
+        // read it has always had: that read is the whole gate for that program.
+        const probe = await readAnthropicJuniperStatus({ accessToken, fetchFn: deps.fetchFn });
+        status = mergeAnthropicResetStatus(status, probe);
+      }
     } catch (error) {
       return readFailure(ctx, error, operationReceipt);
     }
@@ -272,9 +326,13 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
 
   let answer;
   try {
-    answer = await claimAnthropicResetGrant({
-      accessToken, organizationUuid, grantId, requestId: operationId, fetchFn: deps.fetchFn,
-    });
+    answer = grantId === ANTHROPIC_JUNIPER_GRANT_ID
+      // juniper files its own body — {"program":"juniper_tide"} and nothing else, so
+      // the operation id stays a local ledger key and is never sent upstream.
+      ? await claimAnthropicJuniperReset({ accessToken, organizationUuid, fetchFn: deps.fetchFn })
+      : await claimAnthropicResetGrant({
+        accessToken, organizationUuid, grantId, requestId: operationId, fetchFn: deps.fetchFn,
+      });
   } catch {
     try {
       releaseAnthropicResetLease(operationId, { journalPath: deps.journalPath, now: deps.now?.() });

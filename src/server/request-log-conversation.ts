@@ -141,8 +141,9 @@ function firstSanitizedConversationId(
 /**
  * Conversation namespace for reasoning replay. Unlike the persisted log id, this stays the raw
  * sanitized identity so mixed headers that carry the same conversation still hit one serving
- * record. Do not hash, and do not prefer session_id over a true per-conversation thread/Cursor
- * identity: session_id can be synthesized from a shared prompt_cache_key.
+ * record. The request's own thread-id precedes the parent routing identity: a child's successful
+ * route must not overwrite its parent's reasoning provenance. Do not hash, and do not prefer
+ * session_id over a thread/Cursor identity: it can be synthesized from a shared prompt_cache_key.
  */
 export function reasoningReplayConversationIdFromResponsesRequest(input: {
   clientThreadId?: string;
@@ -151,8 +152,8 @@ export function reasoningReplayConversationIdFromResponsesRequest(input: {
   sessionIdHeader?: string | null;
 }): string | undefined {
   return firstSanitizedConversationId(
-    input.clientThreadId,
     input.threadIdHeader,
+    input.clientThreadId,
     input.cursorConversationId,
     input.sessionIdHeader,
   );

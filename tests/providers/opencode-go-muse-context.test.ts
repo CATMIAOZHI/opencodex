@@ -10,8 +10,9 @@
 import { describe, expect, test } from "bun:test";
 import { applyProviderConfigHints } from "../../src/codex/catalog";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../../src/providers/registry";
-import { providerConfigSeed } from "../../src/providers/derive";
-import type { OcxProviderConfig } from "../../src/types";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
+import { routeModel } from "../../src/router";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const MUSE_MODEL = "muse-spark-1.2-contributor";
 const MUSE_13_MODEL = "muse-spark-1.3-contributor";
@@ -66,5 +67,22 @@ describe("OpenCode Go Muse Spark context window", () => {
       provider: "opencode-go",
     });
     expect(hinted.contextWindow).toBe(MUSE_CONTEXT);
+  });
+
+  test("a partial saved context map receives runtime registry keys without persisting defaults", () => {
+    const entry = getProviderRegistryEntry("opencode-go")!;
+    const saved = {
+      adapter: entry.adapter,
+      baseUrl: entry.baseUrl,
+      modelContextWindows: { "kimi-k3": 300_000 },
+    } as OcxProviderConfig;
+
+    enrichProviderFromRegistry("opencode-go", saved);
+
+    expect(saved.modelContextWindows?.["kimi-k3"]).toBe(300_000);
+    expect(saved.modelContextWindows?.[MUSE_MODEL]).toBeUndefined();
+    const routed = routeModel({ providers: { "opencode-go": saved } } as OcxConfig, `opencode-go/${MUSE_MODEL}`);
+    expect(routed.provider.modelContextWindows?.[MUSE_MODEL]).toBe(MUSE_CONTEXT);
+    expect(routed.provider.modelContextWindows?.["kimi-k3"]).toBe(300_000);
   });
 });

@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 99.
+Declared capabilities: 100.
 
 ### `ocx update`
 
@@ -1045,6 +1045,21 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the result as JSON. |
 
 - Run acceptance is not completion; inspect storage policy show for job state.
+
+### `ocx debug requests`
+
+Usage: `ocx debug requests [status|on|off|reset]`
+
+Read or change full local request capture.
+
+State-changing: yes. JSON mode: `none`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/debug` |
+| PUT | `/api/debug` |
+
+- Complete Responses ingress and HTTP egress bodies in local request-captures; no dashboard body export. Off by default; no automatic deletion. Status reads; on/off/reset change the runtime override.
 
 ### `ocx debug provider`
 

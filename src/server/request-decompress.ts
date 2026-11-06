@@ -299,7 +299,7 @@ export async function readBoundedJsonRequestBody(
   req: Request,
   maxBytes: number,
   budget?: TranslatorBudget,
-  options?: { emptyBodyFallback?: unknown; signal?: AbortSignal },
+  options?: { emptyBodyFallback?: unknown; signal?: AbortSignal; onDecodedText?: (text: string) => Promise<void> },
 ): Promise<unknown> {
   const encoding = req.headers.get("content-encoding");
   const declaredLength = declaredBodyLength(req);
@@ -334,6 +334,7 @@ export async function readBoundedJsonRequestBody(
       return options.emptyBodyFallback;
     }
     const parsed = JSON.parse(text);
+    await options?.onDecodedText?.(text);
     // Keep the serialized-size contract: normalization can expand numeric literals. The
     // measurement walks iteratively, so a deeply nested valid body cannot overflow the stack.
     const parsedBytes = serializedJsonByteLength(parsed);
@@ -357,6 +358,7 @@ export function readJsonRequestBody(
   req: Request,
   budget?: TranslatorBudget,
   maxBytes: number = MAX_DECOMPRESSED_BODY_BYTES,
+  onDecodedText?: (text: string) => Promise<void>,
 ): Promise<unknown> {
-  return readBoundedJsonRequestBody(req, maxBytes, budget);
+  return readBoundedJsonRequestBody(req, maxBytes, budget, { onDecodedText });
 }

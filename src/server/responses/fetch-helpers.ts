@@ -34,6 +34,7 @@ import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
+import { bindFullRequestCapture, observeFullRequestHttp } from "../../lib/request-capture-context";
 
 export { withUpstreamHttpVersion };
 
@@ -235,7 +236,7 @@ export function sendWithConnectionPolicy(
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
   // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
   outboundCredentials().remember(headers);
-  return physicalFetch(input, {
+  return observeFullRequestHttp(input, {
     ...init,
     ...(compressed ? { body: compressed.body } : largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
     headers,
@@ -244,7 +245,7 @@ export function sendWithConnectionPolicy(
     ...egressInit,
     ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
     ...{ [UPSTREAM_REWRITTEN]: true },
-  });
+  }, finalInit => physicalFetch(input, finalInit));
 }
 
 interface CodexWsExecutor { provider: OcxProviderConfig; http: typeof globalThis.fetch }
@@ -429,7 +430,7 @@ export function providerFetch(
     }
     return httpFetch(input, init, reacquirePacing);
   };
-  const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
+  const unpaced = bindFullRequestCapture(async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
     reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
     const observe = options.accountAutoPause?.(providerName, provider,
       new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
@@ -437,7 +438,7 @@ export function providerFetch(
       ? { ...init, ...physicalSendObserverInit(observe, input instanceof Request ? input.url : String(input)) } : init;
     const response = await unobserved(input, observedInit, reacquirePacing);
     return observe ? observe(response) : response;
-  };
+  });
   let pacingSlotAcquired = options.pacingSlotAcquired === true;
   const waitForPacing = async (signal?: AbortSignal): Promise<ProviderRequestSlot | undefined> => {
     if (pacingSlotAcquired) {

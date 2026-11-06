@@ -217,10 +217,10 @@ combo id, without a conversation dimension, and the SSE model-name rewrite prese
 combo name instead of exposing the concrete target switch. A user can therefore observe a reasoning
 cache drop with no visible model change.
 
-The image and web-search auxiliary loops consume `_reasoningReplayScope` for bridge-level replay but
-never call `bindRouteReasoningReplayScope`, so their internal small-model requests do not update the
-serving-identity record. That omission is intentional: binding those routes would poison the main
-conversation's last-serving identity and cause a later main-model turn to strip valid blobs.
+Image and web-search auxiliary loops consume `_reasoningReplayScope` but never call `bindRouteReasoningReplayScope`;
+their small-model requests must not overwrite the main conversation's serving identity and invalidate its blobs.
+`src/server/request-log-conversation.ts` resolves Responses replay by valid own `thread-id`, then parent, Cursor and session fallbacks.
+Concrete dispatch and combo eligibility use this isolation for child/sibling provenance and rejection memos; actual same-thread route changes still strip foreign reasoning. Parent routing affinity and dashboard grouping remain unchanged.
 
 > Decision record: [ADR-0051](../decisions/ADR-0051-reasoning-and-tool-result-compatibility.md)
 > Decision record: [ADR-6574](../decisions/ADR-6574-ollama-tool-continuations.md)

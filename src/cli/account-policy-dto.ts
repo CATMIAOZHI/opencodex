@@ -60,6 +60,8 @@ const grant = z.object({ id: grantId, label: text, resetsTotal: z.number().int()
 export const grantsSchema = z.object({ provider: z.enum(["anthropic", "anthropic2"]).optional(), accountId: text.min(1), eligible: z.boolean(),
   ineligibleReason: z.enum(["config_off", "tier", "seat", "mobile", "surface", "cli_version", "no_grant", "tenure", "other_experiment", "unavailable", "unknown"]).nullable(),
   atLimit: z.boolean(), grants: z.array(grant).refine(values => new Set(values.map(value => value.id)).size === values.length), nextGrantId: grantId.nullable(), weeklyResetsAt: date, cooldownUntil: date,
+  // Why the 5-hour program withheld its ticket; optional so an older server still parses.
+  juniperOffer: z.object({ reason: text.nullable(), fiveHourPercent: threshold.nullable() }).nullable().optional(),
   pendingOperation: z.object({ operationId: z.string().uuid(), grantId, createdAt: z.number().finite(),
     retryableUntil: z.number().finite() }).nullable(), journalAvailable: z.boolean(),
 });

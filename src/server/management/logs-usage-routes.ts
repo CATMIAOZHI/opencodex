@@ -161,21 +161,22 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   }
 
   if (url.pathname === "/api/debug" && req.method === "PUT") {
-    let body: { debug?: unknown; usage?: unknown; injection?: unknown; claude?: unknown; reset?: unknown };
+    let body: { debug?: unknown; usage?: unknown; injection?: unknown; claude?: unknown; requests?: unknown; reset?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (body.reset === true) return jsonResponse(clearDebugSettings());
     if (body.reset === "debug" || body.reset === "provider") return jsonResponse(clearDebugSetting("debug"));
     if (body.reset === "usage") return jsonResponse(clearDebugSetting("usage"));
     if (body.reset === "injection") return jsonResponse(clearDebugSetting("injection"));
     if (body.reset === "claude") return jsonResponse(clearDebugSetting("claude"));
+    if (body.reset === "requests") return jsonResponse(clearDebugSetting("requests"));
     const partial: Partial<Record<DebugFlag, boolean>> = {};
-    for (const key of ["debug", "usage", "injection", "claude"] as const) {
+    for (const key of ["debug", "usage", "injection", "claude", "requests"] as const) {
       if (body[key] === undefined) continue;
       if (typeof body[key] !== "boolean") return jsonResponse({ error: `${key} must be a boolean` }, 400);
       partial[key] = body[key];
     }
     if (Object.keys(partial).length === 0) {
-      return jsonResponse({ error: "provide debug/usage/injection/claude booleans or reset:true" }, 400);
+      return jsonResponse({ error: "provide debug/usage/injection/claude/requests booleans or reset:true" }, 400);
     }
     // Turning capture off should also flush already-captured entries (privacy contract).
     if (partial.claude === false) {

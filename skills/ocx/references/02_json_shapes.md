@@ -307,8 +307,13 @@ IDs. Quota activation returns `{ok, id, window, enabled, available}`, with windo
 
 Anthropic reset-grants returns `accountId`, `eligible`, nullable `ineligibleReason`,
 `atLimit`, `grants`, nullable `nextGrantId`, `weeklyResetsAt`, `cooldownUntil`,
-`pendingOperation`, and `journalAvailable`. Grants preserve counts, nullable dates,
+nullable `juniperOffer`, `pendingOperation`, and `journalAvailable`. Grants preserve counts, nullable dates,
 `clears`, `paused`, `usableNow`, `useRequiresLimit` and observed `percentUsed`.
+`juniperOffer` is `{reason, fiveHourPercent}` when the 5-hour program answered, and null
+when no trustworthy answer came back; its `reason` (`not_at_wall`, `tenure`, …) explains a
+withheld ticket and is not cedar's closed `ineligibleReason` set.
+A `juniper_tide` grant clears the 5-hour window only and carries the program name as its
+id, while a `cedar_ember` grant clears the 5-hour and weekly windows.
 Pending operation contains operation/grant IDs and timing; it is never an instruction
 to resume spending. Empty grants and unavailable status differ.
 

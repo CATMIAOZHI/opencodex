@@ -431,7 +431,8 @@ describe("combo catalog capability intersection", () => {
       expect(row.owned_by).toBe("combo");
       expect(row.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
       expect(row).not.toHaveProperty("model_messages");
-      expect(row.tool_mode).toBe("code_mode_only");
+      expect(row.tool_mode).toBe("direct");
+      expect(row.multi_agent_version).toBe("v2");
       expect(row.web_search_tool_type).toBe("text_and_image");
       expect(row.supports_search_tool).toBe(true);
     }
@@ -3421,10 +3422,8 @@ describe("Codex catalog routed normalization", () => {
 
     expect(routed).toBeDefined();
     expect(routed).not.toHaveProperty("model_messages");
-    expect(routed?.tool_mode).toBe("code_mode_only");
-    // Routed entries do not inherit a native template's surface pin; the global
-    // Codex v2 flag can choose the surface freely unless upstream pins the model.
-    expect(routed).not.toHaveProperty("multi_agent_version");
+    expect(routed?.tool_mode).toBe("direct");
+    expect(routed?.multi_agent_version).toBe("v2");
     expect(routed).not.toHaveProperty("use_responses_lite");
     expect(routed).not.toHaveProperty("supports_websockets");
     expect(routed).not.toHaveProperty("additional_speed_tiers");
@@ -3572,10 +3571,10 @@ describe("Codex catalog routed normalization", () => {
     expect(sol?.description).toBe("Reliable agentic workhorse for everyday tasks.");
     expect(sol?.availability_nux).toBeDefined();
 
-    // Per-slug multi-agent generation: sol/terra v2, luna v1.
+    // The operator policy publishes V2 collaboration for every final row.
     expect(sol?.multi_agent_version).toBe("v2");
     expect(terra?.multi_agent_version).toBe("v2");
-    expect(luna?.multi_agent_version).toBe("v1");
+    expect(luna?.multi_agent_version).toBe("v2");
 
     const codex0151Contract = {
       shell_type: "unified_exec",
@@ -3597,7 +3596,7 @@ describe("Codex catalog routed normalization", () => {
       expect(e).not.toHaveProperty("prefer_websockets");
       expect(e).not.toHaveProperty("supports_websockets");
       expect(e?.context_window).toBe(272_000);
-      expect(e?.tool_mode).toBe("code_mode_only");
+      expect(e?.tool_mode).toBe("direct");
       expect(e?.use_responses_lite).toBe(true);
     }
   });
@@ -3948,7 +3947,7 @@ describe("Codex catalog routed normalization", () => {
       max_context_window: 922_000,
       auto_compact_token_limit: 829_800,
       comp_hash: "3000",
-      tool_mode: "code_mode_only",
+      tool_mode: "direct",
       use_responses_lite: true,
       supports_parallel_tool_calls: true,
       supports_search_tool: true,
@@ -4093,7 +4092,7 @@ describe("Codex catalog routed normalization", () => {
       const row = entries.find(entry => entry.slug === `${fixture.name}/${fixture.modelId}`);
       expect(row ? catalogEntryEfforts(row) : undefined).toEqual(fixture.catalogEfforts);
       expect(row?.use_responses_lite).toBeUndefined();
-      expect(row?.multi_agent_version).toBeUndefined();
+      expect(row?.multi_agent_version).toBe("v2");
     },
   );
 
@@ -4182,7 +4181,8 @@ describe("Codex catalog routed normalization", () => {
     // every non-Cursor row since fcbef381e restored deferred tool discovery. The inheritance
     // rejection is proven by the native-only fields above and below.
     expect(row?.supports_search_tool).toBe(true);
-    expect(row?.multi_agent_version).toBeUndefined();
+    // Global operator policy is independent of native Daybreak capability inheritance.
+    expect(row?.multi_agent_version).toBe("v2");
   });
 
   test("an explicit empty custom ladder beats the native-alias ladder on a forward row", async () => {
@@ -4358,16 +4358,14 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.auto_compact_token_limit).toBe(115_200);
   });
 
-  test("buildCatalogEntries preserves native bare GPT template fields", () => {
+  test("buildCatalogEntries preserves native GPT metadata under the global tool policy", () => {
     const entries = buildCatalogEntries(nativeTemplate(), ["gpt-5.5"], []);
     const native = entries.find(e => e.slug === "gpt-5.5");
 
     expect(native).toBeDefined();
     expect(native).toHaveProperty("model_messages");
-    expect(native?.tool_mode).toBe("code");
-    // Default mode clears multi_agent_version on non-pinned natives (gpt-5.5
-    // has no upstream pin — codex feature flag decides the surface).
-    expect(native?.multi_agent_version).toBeUndefined();
+    expect(native?.tool_mode).toBe("direct");
+    expect(native?.multi_agent_version).toBe("v2");
     // Non-5.6 natives do not support responses-lite: the template may carry it from a
     // 5.6 entry, but deriveEntry strips it so codex-rs does not inject
     // reasoning.context: "all_turns" for models that reject it.
@@ -4380,23 +4378,24 @@ describe("Codex catalog routed normalization", () => {
     expect(native?.service_tiers).toEqual([{ id: "priority" }]);
   });
 
-  test("buildCatalogEntries assigns code-only tools to routed fallback rows", () => {
+  test("buildCatalogEntries applies the global direct policy to routed fallback rows", () => {
     const rows = buildCatalogEntries(null, [], [
       { provider: "deepseek", id: "deepseek-v4-flash", owned_by: "deepseek" },
     ]);
 
     const routed = rows.find(row => row.slug === "deepseek/deepseek-v4-flash");
     expect(routed).toMatchObject({
-      tool_mode: "code_mode_only",
+      tool_mode: "direct",
+      multi_agent_version: "v2",
       shell_type: "unified_exec",
       node_repl_disabled: false,
       node_repl_auto_review_required: false,
       include_plugin_usage_instructions: false,
-      include_apps_usage_instructions: true,
+      include_apps_usage_instructions: false,
     });
   });
 
-  test("buildCatalogEntries preserves native tool mode on account-qualified rows", () => {
+  test("buildCatalogEntries applies the global direct policy to native account rows", () => {
     const rows = buildCatalogEntries(
       nativeTemplate(),
       ["gpt-5.5"],
@@ -4408,8 +4407,8 @@ describe("Codex catalog routed normalization", () => {
       ["team"],
     );
 
-    expect(rows.find(row => row.slug === "gpt-5.5")?.tool_mode).toBe("code");
-    expect(rows.find(row => row.slug === "team/gpt-5.5")?.tool_mode).toBe("code");
+    expect(rows.find(row => row.slug === "gpt-5.5")?.tool_mode).toBe("direct");
+    expect(rows.find(row => row.slug === "team/gpt-5.5")?.tool_mode).toBe("direct");
   });
 
   test("catalog sync keeps native OpenAI rows when adopted providers expose matching ids", () => {

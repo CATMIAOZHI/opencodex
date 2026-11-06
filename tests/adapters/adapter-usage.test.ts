@@ -113,6 +113,86 @@ describe("adapter reasoning and usage details", () => {
     });
   });
 
+  test("Anthropic usage maps the 1-hour cache-write breakdown", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const events = await adapter.parseResponse?.(new Response(JSON.stringify({
+      content: [{ type: "text", text: "answer" }],
+      usage: {
+        input_tokens: 20,
+        output_tokens: 8,
+        cache_read_input_tokens: 4,
+        cache_creation_input_tokens: 6,
+        cache_creation: { ephemeral_5m_input_tokens: 2, ephemeral_1h_input_tokens: 4 },
+      },
+    })));
+
+    expect(events?.at(-1)).toEqual({
+      type: "done",
+      usage: {
+        // The split is a subset of the write total, which `inputTokens` still counts exactly once.
+        inputTokens: 30,
+        outputTokens: 8,
+        cachedInputTokens: 4,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 6,
+        cacheCreation1hInputTokens: 4,
+      },
+    });
+  });
+
+  test("Anthropic usage bounds the 1-hour share independently of a contradictory 5-minute share", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const events = await adapter.parseResponse?.(new Response(JSON.stringify({
+      content: [{ type: "text", text: "answer" }],
+      usage: {
+        input_tokens: 20,
+        output_tokens: 8,
+        cache_read_input_tokens: 4,
+        cache_creation_input_tokens: 6,
+        // Upstream uses the finite 1-hour subset, bounded by the authoritative total.
+        cache_creation: { ephemeral_5m_input_tokens: 9, ephemeral_1h_input_tokens: 4 },
+      },
+    })));
+
+    expect(events?.at(-1)).toEqual({
+      type: "done",
+      usage: {
+        inputTokens: 30,
+        outputTokens: 8,
+        cachedInputTokens: 4,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 6,
+        cacheCreation1hInputTokens: 4,
+      },
+    });
+  });
+
+  test("Anthropic usage treats a zero 1-hour split as no 1-hour tokens", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const events = await adapter.parseResponse?.(new Response(JSON.stringify({
+      content: [{ type: "text", text: "answer" }],
+      usage: {
+        input_tokens: 20,
+        output_tokens: 8,
+        cache_read_input_tokens: 4,
+        cache_creation_input_tokens: 6,
+        cache_creation: { ephemeral_5m_input_tokens: 6, ephemeral_1h_input_tokens: 0 },
+      },
+    })));
+
+    expect(events?.at(-1)).toEqual({
+      type: "done",
+      usage: {
+        inputTokens: 30,
+        outputTokens: 8,
+        cachedInputTokens: 4,
+        cacheReadInputTokens: 4,
+        cacheCreationInputTokens: 6,
+        cacheCreation1hInputTokens: 0,
+      },
+    });
+  });
+
   test("Anthropic usage does not fabricate cache tokens when absent", async () => {
     const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
     const events = await adapter.parseResponse?.(new Response(JSON.stringify({

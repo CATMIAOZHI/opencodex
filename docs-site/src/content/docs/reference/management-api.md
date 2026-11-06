@@ -8,6 +8,10 @@ The Management API is opencodex's control plane. The dashboard at
 settings, diagnostics, and lifecycle commands are clients too. The API is available only while the
 proxy is running.
 
+This fork also supports the separate `juniper_tide` five-hour-only reset. Account grant reads include nullable `juniperOffer` eligibility (`reason`, `fiveHourPercent`); the dialog refreshes on open and offers manual refresh even when no grant is listed. A transient read failure preserves the last known view. Reset submission requires confirmation and never changes the weekly limit or consumes a `cedar_ember` offer.
+
+Optional [full-request capture](/reference/full-request-capture/) records local diagnostic files and stays off by default; enabling it is persistent.
+
 Use the [Web Dashboard](/guides/web-dashboard/) for an interactive client, or this reference when
 building automation. Persistent values ultimately follow [Configuration](/reference/configuration/).
 

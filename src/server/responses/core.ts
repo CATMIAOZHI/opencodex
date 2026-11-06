@@ -15,6 +15,7 @@ import { executeComboResponses } from "./core-combo";
 import { registerTurn, unregisterTurn } from "../lifecycle";
 import { runWithCompactionRecovery } from "./compaction-recovery";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
+import { withFullRequestCapture } from "../../usage/full-request-capture";
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -25,6 +26,7 @@ export async function handleResponses(
   logCtx: RequestLogContext,
   options: HandleResponsesOptions = {},
 ): Promise<Response> {
+  return withFullRequestCapture(logCtx, async () => {
   const ownsBudget = options.translatorBudget === undefined;
   const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
   const abortSignal = options.abortSignal ?? req.signal;
@@ -61,6 +63,7 @@ export async function handleResponses(
   } finally {
     if (!options.comboInitialSend?.producerOwned) options.comboInitialSend?.permit.release();
   }
+  });
 }
 export async function handleComboResponses(
   req: Request,

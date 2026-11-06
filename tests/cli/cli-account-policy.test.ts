@@ -189,11 +189,14 @@ describe("policy tasks and safe receipts", () => {
     expect(f.calls).toHaveLength(1); expect(f.calls[0]!.method).toBe("GET"); expect(result()).toEqual(grants); privateOutput();
   });
   test("reset pending and nullable status fields survive while secret extras disappear", async () => {
-    const payload = { ...grants, journalAvailable: false, pendingOperation: { operationId: "00000000-0000-4000-8000-000000000000", grantId: "g1", createdAt: 1, retryableUntil: 2, token: PRIVATE },
+    const payload = { ...grants, journalAvailable: false, juniperOffer: { reason: "not_at_wall", fiveHourPercent: 20, token: PRIVATE },
+      pendingOperation: { operationId: "00000000-0000-4000-8000-000000000000", grantId: "g1", createdAt: 1, retryableUntil: 2, token: PRIVATE },
       grants: [{ id: "g1", label: "Reset", resetsTotal: 2, resetsLeft: 1, startsAt: null, endsAt: null, clears: ["five_hour"], paused: false,
         usableNow: true, useRequiresLimit: true, percentUsed: { five_hour: 100, token: PRIVATE }, token: PRIVATE }] };
     const f = fixture(() => payload); expect(await policy("anthropic-reset-grants", ["--json"], f.deps)).toBe(0);
-    expect(result().pendingOperation.retryableUntil).toBe(2); privateOutput();
+    expect(result().pendingOperation.retryableUntil).toBe(2);
+    // The explanation survives, but its own upstream extras do not.
+    expect(result().juniperOffer).toEqual({ reason: "not_at_wall", fiveHourPercent: 20 }); privateOutput();
   });
   test("reset upstream refusal uses known actionable fixed code", async () => {
     const f = fixture(() => Response.json({ error: { code: "auth_failed", message: PRIVATE } }, { status: 401 }));

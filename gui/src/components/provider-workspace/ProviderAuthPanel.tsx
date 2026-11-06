@@ -255,7 +255,11 @@ export default function ProviderAuthPanel({
   const isAnthropicPool = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item);
   const claudeGrantsEnabled = isOauth && isAnthropicPool && accounts.length > 0;
   const claudeAccountIds = useMemo(
-    () => (claudeGrantsEnabled ? accounts.filter(account => !accountShowsReauth(account)).map(account => account.id) : []),
+    // A paused account cannot spend a reset, so it is not offered one: the server's
+    // credential read refuses it outright rather than answering with a ticket.
+    () => (claudeGrantsEnabled
+      ? accounts.filter(account => !accountShowsReauth(account) && !account.paused).map(account => account.id)
+      : []),
     [claudeGrantsEnabled, accounts],
   );
   const claudeGrants = useAnthropicResetGrants({ apiBase, provider: isAnthropicInstanceId(item.name) ? item.name : "anthropic", accountIds: claudeAccountIds, enabled: claudeGrantsEnabled });
@@ -626,7 +630,7 @@ export default function ProviderAuthPanel({
                         onClick={() => setCouponAccount(account)}
                       />
                     )}
-                    {claudeGrantsEnabled && !showReauth && (
+                    {claudeGrantsEnabled && !showReauth && !account.paused && (
                       <AnthropicGrantBadge entry={claudeGrants.entries[account.id]} t={t} onClick={() => setGrantAccount(account)} />
                     )}
                     <button type="button" className="btn btn-ghost btn-sm"

@@ -38,10 +38,21 @@ export interface AnthropicPendingOperation {
   retryableUntil: number;
 }
 
+/**
+ * Why the 5-hour-only (`juniper_tide`) program offered no ticket, straight from
+ * upstream (`not_at_wall`, `tenure`, …). `null` in the snapshot means the probe
+ * gave no answer at all, which is not the same as "not eligible".
+ */
+export interface AnthropicJuniperOffer {
+  reason: string | null;
+  fiveHourPercent: number | null;
+}
+
 export interface AnthropicResetGrantSnapshot {
   eligible: boolean;
   atLimit: boolean;
   grants: AnthropicResetGrant[];
+  juniperOffer: AnthropicJuniperOffer | null;
   pendingOperation: AnthropicPendingOperation | null;
   journalAvailable: boolean;
 }
@@ -58,7 +69,14 @@ export type AnthropicSpendOutcome =
 
 export interface AnthropicResetGrantController {
   entries: Record<string, AnthropicGrantEntry>;
-  refresh: (accountId: string) => Promise<void>;
+  /**
+   * `silent` re-reads in place: no `loading` entry, and a transient failure (5xx,
+   * dropped socket, abort) keeps the previous answer instead of replacing it with
+   * an error. Definitive answers still replace it — 4xx codes, and a 2xx body this
+   * client cannot read. The dialog's open-time re-read uses it so a hiccup cannot
+   * clear a known-good snapshot or hide a server-held pending operation.
+   */
+  refresh: (accountId: string, options?: { silent?: boolean }) => Promise<void>;
   spend: (accountId: string, request: { grantId: string; operationId: string }) => Promise<AnthropicSpendOutcome>;
 }
 
@@ -116,10 +134,20 @@ export function parseAnthropicGrantSnapshot(value: unknown): AnthropicResetGrant
     && typeof pending.retryableUntil === "number") {
     pendingOperation = { operationId: pending.operationId, grantId: pending.grantId, retryableUntil: pending.retryableUntil };
   }
+  // Optional: a proxy that predates the field simply offers no explanation.
+  let juniperOffer: AnthropicJuniperOffer | null = null;
+  if (isRecord(value.juniperOffer)) {
+    const percent = value.juniperOffer.fiveHourPercent;
+    juniperOffer = {
+      reason: typeof value.juniperOffer.reason === "string" ? value.juniperOffer.reason : null,
+      fiveHourPercent: typeof percent === "number" && Number.isFinite(percent) ? percent : null,
+    };
+  }
   return {
     eligible: value.eligible,
     atLimit: value.atLimit === true,
     grants,
+    juniperOffer,
     pendingOperation,
     journalAvailable: value.journalAvailable !== false,
   };
@@ -159,11 +187,16 @@ export function useAnthropicResetGrants({ apiBase, provider = "anthropic", accou
   );
   const epoch = useRef(0);
   const tokens = useRef(new Map<string, number>());
+  /** Per-account start order of reads, and the order that last wrote the store. */
+  const readSeq = useRef(new Map<string, number>());
+  const appliedSeq = useRef(new Map<string, number>());
   const gate = useRef<{ active: number; waiting: Array<() => void> }>({ active: 0, waiting: [] });
   const identity = accountIds.join("\u0000");
   useLayoutEffect(() => {
     epoch.current += 1;
     tokens.current.clear();
+    readSeq.current.clear();
+    appliedSeq.current.clear();
     // A stalled read from the previous pool must not occupy this pool's read slots. Reads
     // already running settle against the queue they captured; queued ones are released and
     // return at their epoch check without sending.
@@ -180,16 +213,33 @@ export function useAnthropicResetGrants({ apiBase, provider = "anthropic", accou
     }));
   }, [namespace]);
 
-  const read = useCallback(async (accountId: string, rosterEpoch: number) => {
+  const read = useCallback(async (accountId: string, rosterEpoch: number, keepOnFailure = false) => {
     if (epoch.current !== rosterEpoch) return;
-    const token = (tokens.current.get(accountId) ?? 0) + 1;
-    tokens.current.set(accountId, token);
+    // A silent read joins the account's current generation instead of minting one:
+    // an earlier read still in flight (the post-spend re-read, say) may carry the
+    // answer this one is about to miss, and a failed silent read must not discard it.
+    const previous = tokens.current.get(accountId);
+    const token = keepOnFailure && previous !== undefined ? previous : (previous ?? 0) + 1;
+    if (token !== previous) tokens.current.set(accountId, token);
+    const startSeq = (readSeq.current.get(accountId) ?? 0) + 1;
+    readSeq.current.set(accountId, startSeq);
     const queue = gate.current;
     if (queue.active >= MAX_READS_IN_FLIGHT) {
       await new Promise<void>(resolve => queue.waiting.push(resolve));
     }
     queue.active += 1;
     const current = () => epoch.current === rosterEpoch && tokens.current.get(accountId) === token;
+    /**
+     * Answers land in start order, not arrival order. A slower older read must not
+     * overwrite a newer one, and a failed silent read must not suppress an older
+     * read that is about to succeed — so only an answer started after the last
+     * applied one may write.
+     */
+    const apply = (entry: AnthropicGrantEntry) => {
+      if (startSeq < (appliedSeq.current.get(accountId) ?? 0)) return;
+      appliedSeq.current.set(accountId, startSeq);
+      setEntry(accountId, entry);
+    };
     const bounded = createBoundedFetch(READ_TIMEOUT_MS);
     try {
       if (!current()) return;
@@ -197,16 +247,28 @@ export function useAnthropicResetGrants({ apiBase, provider = "anthropic", accou
         `${apiBase}/api/anthropic/reset-grants?accountId=${encodeURIComponent(accountId)}${provider === "anthropic" ? "" : `&provider=${encodeURIComponent(provider)}`}`,
         { signal: bounded.signal },
       );
-      const raw = response.ok ? await response.json().catch(() => null) : null;
-      const ownsResponse = isRecord(raw) && (raw.provider === provider || (provider === "anthropic" && raw.provider === undefined));
+      let raw: unknown = null;
+      let bodyFailed = false;
+      try {
+        raw = await response.json();
+      } catch {
+        bodyFailed = true;
+      }
+      const ownsResponse = response.ok && !bodyFailed && isRecord(raw)
+        && (raw.provider === provider || (provider === "anthropic" && raw.provider === undefined));
       const snapshot = ownsResponse ? parseAnthropicGrantSnapshot(raw) : null;
       if (!current()) return;
-      setEntry(accountId, snapshot
-        ? { status: "ready", snapshot }
-        : { status: "error", reason: response.status === 401 ? "auth" : "upstream" });
+      if (snapshot) { apply({ status: "ready", snapshot }); return; }
+      // A 4xx is the management API answering (bad account, auth, bad request), and a
+      // 2xx we cannot read is an answer we cannot use: keeping an older ticket over
+      // either would show a reset the server no longer offers. Only 5xx, transport
+      // failures and an abort (including our own body-read deadline) are transient.
+      const definitive = !bounded.signal.aborted && (response.ok || response.status < 500);
+      const auth = definitive && errorCode(raw) === "auth_failed";
+      if (definitive || !keepOnFailure) apply({ status: "error", reason: auth ? "auth" : "upstream" });
     } catch {
       if (!current()) return;
-      setEntry(accountId, { status: "error", reason: "upstream" });
+      if (!keepOnFailure) apply({ status: "error", reason: "upstream" });
     } finally {
       bounded.clear();
       queue.active -= 1;
@@ -223,9 +285,10 @@ export function useAnthropicResetGrants({ apiBase, provider = "anthropic", accou
     return () => { epoch.current += 1; };
   }, [enabled, identity, read]);
 
-  const refresh = useCallback(async (accountId: string) => {
-    setEntry(accountId, { status: "loading" });
-    await read(accountId, epoch.current);
+  const refresh = useCallback(async (accountId: string, options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
+    if (!silent) setEntry(accountId, { status: "loading" });
+    await read(accountId, epoch.current, silent);
   }, [read, setEntry]);
 
   const spend = useCallback(async (

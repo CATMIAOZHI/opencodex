@@ -345,7 +345,7 @@ describe("Codex catalog sync hardening", () => {
       comp_hash: "native-sol-hash",
       base_instructions: "Native Sol instructions",
       model_messages: { instructions_template: "Native Sol instructions" },
-      tool_mode: "code_mode_only",
+      tool_mode: "direct",
       opencodex_catalog_kind: "account-selector-v1",
     });
   });
@@ -560,7 +560,7 @@ describe("Codex catalog sync hardening", () => {
       max_context_window: 922_000,
       auto_compact_token_limit: 244_800,
       comp_hash: "3000",
-      tool_mode: "code_mode_only",
+      tool_mode: "direct",
       use_responses_lite: true,
       supports_parallel_tool_calls: true,
     });
@@ -619,7 +619,8 @@ describe("Codex catalog sync hardening", () => {
     }
     expect(output.unchanged).toBe(true);
     expect(output.deleted.models.some((row: { slug: string }) => row.slug === "openai/gpt-6-astra")).toBe(false);
-  });
+  // Three syncs and config ACL writes in a subprocess can exceed 5s on Windows.
+  }, 15_000);
 
   test("explicit Codex-forward Daybreak survives sync with Sol metadata while account picker is off", () => {
     const catalogPath = join(codexHome, "catalog.json");
@@ -660,7 +661,7 @@ describe("Codex catalog sync hardening", () => {
       max_context_window: 922_000,
       auto_compact_token_limit: 829_800,
       comp_hash: "3000",
-      tool_mode: "code_mode_only",
+      tool_mode: "direct",
       use_responses_lite: true,
       supports_parallel_tool_calls: true,
       supports_search_tool: true,
@@ -753,7 +754,7 @@ describe("Codex catalog sync hardening", () => {
     expect(rows.some(row => row.slug === "desktop/gpt-5.5")).toBe(false);
   });
 
-  test("catalog sync persists routed code mode without changing native account rows", () => {
+  test("catalog sync applies the global direct policy to routed and native account rows", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     writeFileSync(catalogPath, JSON.stringify({
@@ -787,9 +788,9 @@ describe("Codex catalog sync hardening", () => {
       tool_mode?: string | null;
     }>;
     expect(rows.find(row => row.slug === "deepseek/deepseek-v4-flash")?.tool_mode)
-      .toBe("code_mode_only");
-    expect(rows.find(row => row.slug === "gpt-5.5")?.tool_mode).toBe("code");
-    expect(rows.find(row => row.slug === "team/gpt-5.5")?.tool_mode).toBe("code");
+      .toBe("direct");
+    expect(rows.find(row => row.slug === "gpt-5.5")?.tool_mode).toBe("direct");
+    expect(rows.find(row => row.slug === "team/gpt-5.5")?.tool_mode).toBe("direct");
   });
 
   test("disabled canonical OpenAI keeps bare bootstrap rows but omits unrouteable account rows", () => {
@@ -1137,7 +1138,7 @@ describe("Codex catalog sync hardening", () => {
     slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("future-grok/legacy-model");
     expect(slugs).toContain("cursor/composer-2.5");
-  });
+  }, process.platform === "win32" ? 15_000 : 5_000);
 
   test("drops legacy combo-alias ghost rows in both gather branches", () => {
     const legacyComboAlias = {
@@ -1189,7 +1190,7 @@ describe("Codex catalog sync hardening", () => {
     slugs = (JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{ slug: string }>).map(m => m.slug);
     expect(slugs).not.toContain("vendor/fast");
     expect(slugs).toContain("cursor/composer-2.5");
-  });
+  }, process.platform === "win32" ? 15_000 : 5_000);
 
   describe("a refresh that would empty a provider without config.json agreeing (#6529)", () => {
     const seeded = () => JSON.stringify({

@@ -206,10 +206,15 @@ describe("reasoningReplayConversationIdFromResponsesRequest", () => {
     })).not.toBe(digest32("session"));
   });
 
-  test("prefers parent thread, then thread-id, then cursor, then session_id", () => {
+  test("prefers own thread-id, then parent fallback, then cursor, then session_id", () => {
     expect(reasoningReplayConversationIdFromResponsesRequest({
       clientThreadId: "parent-thread",
       threadIdHeader: "thread",
+      cursorConversationId: "cursor",
+      sessionIdHeader: "session",
+    })).toBe("thread");
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      clientThreadId: "parent-thread",
       cursorConversationId: "cursor",
       sessionIdHeader: "session",
     })).toBe("parent-thread");
@@ -228,6 +233,12 @@ describe("reasoningReplayConversationIdFromResponsesRequest", () => {
   });
 
   test("skips empty, control-bearing, and overlong fallbacks", () => {
+    for (const threadIdHeader of ["  ", "bad\nid", "x".repeat(4097)]) {
+      expect(reasoningReplayConversationIdFromResponsesRequest({
+        threadIdHeader,
+        clientThreadId: "parent-thread",
+      })).toBe("parent-thread");
+    }
     expect(reasoningReplayConversationIdFromResponsesRequest({
       threadIdHeader: "  ",
       cursorConversationId: "cursor",

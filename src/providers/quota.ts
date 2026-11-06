@@ -1,4 +1,6 @@
 import { listCodexAuthAccountsSnapshot } from "../codex/auth-api";
+import { boundedQuotaProbe, boundProviderQuotaResponse } from "./quota/deadline";
+export { PROVIDER_QUOTA_PROBE_DEADLINE_MS, PROVIDER_QUOTA_RESPONSE_DEADLINE_MS, setProviderQuotaProbeDeadlineForTests, resetProviderQuotaProbeDeadlineForTests, setProviderQuotaResponseDeadlineForTests, resetProviderQuotaResponseDeadlineForTests } from "./quota/deadline";
 import { isAnthropicInstanceId, configuredAnthropicInstance } from "./anthropic-instance";
 import { ANTIGRAVITY_OAUTH_STORE_KEY } from "./antigravity-quota-identity";
 import { fetchAnthropicAccountQuota } from "./quota/anthropic-account-quota";
@@ -100,6 +102,10 @@ export {
 } from "./quota/account-cache";
 export { fetchAntigravityUsageQuota, isCanonicalAntigravityQuotaUrl, setAntigravityAccountQuotaTransportForTests } from "./quota/antigravity";
 export { parseOllamaCloudBalance, parseOllamaCloudQuota, parseZaiQuotaLimits, providerApiKeyQuotaMode } from "./quota/vendor-probes-key";
+/** Dashboard reads keep cached rows when the background fan-out misses its deadline. */
+export async function fetchProviderQuotaReportsBounded(config: OcxConfig, forceRefresh = false, deadlineMs?: number): Promise<ProviderQuotaResponse> {
+  return boundProviderQuotaResponse(config, fetchProviderQuotaReports(config, forceRefresh), deadlineMs);
+}
 export { parseXaiCreditsResponse } from "./quota/vendor-probes-oauth";
 export async function fetchProviderApiKeyQuotas(config: OcxConfig, name: string, forceRefresh = false): Promise<ProviderApiKeyQuota[]> {
   const provider = config.providers[name];
@@ -267,7 +273,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     const previous = previousCache && previousCache.key === key ? previousCache.response.reports : [];
     const probeResults = await Promise.all(
       Object.entries(config.providers).map(([name, provider]) => (
-        maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
+        boundedQuotaProbe(maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot))
       )),
     );
     const fresh = probeResults.filter((item): item is ProviderQuotaReport => (

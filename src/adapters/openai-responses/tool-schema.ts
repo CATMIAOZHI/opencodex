@@ -10,7 +10,73 @@ import {
 import { isPlainObject } from "./internal";
 import { hasItemProvenance, isHistoricalItem } from "../../responses/item-provenance";
 
-function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
+function withCompletedRequired(schema: Record<string, unknown>): Record<string, unknown> {
+  let result = schema;
+  // Caller schemas can be much deeper than the JavaScript call stack. Complete
+  // children before parents using heap-backed jobs, retaining unchanged objects.
+  const jobs: Array<() => void> = [];
+  const schedule = (source: Record<string, unknown>, done: (completed: Record<string, unknown>) => void): void => {
+    jobs.push(() => {
+      let completed = source;
+      const set = (key: string, value: unknown): void => {
+        if (value !== source[key]) completed = { ...completed, [key]: value };
+      };
+      jobs.push(() => {
+        if (isPlainObject(completed.properties)) {
+          const originalRequired = completed.required;
+          const required = Array.isArray(originalRequired)
+            ? originalRequired.filter((name): name is string => typeof name === "string") : [];
+          const names = new Set(required);
+          const missing = Object.keys(completed.properties).filter(name => !names.has(name));
+          if (!Array.isArray(originalRequired) || required.length !== originalRequired.length || missing.length > 0) {
+            completed = { ...completed, required: [...required, ...missing] };
+          }
+        }
+        done(completed);
+      });
+      const completeArray = (key: string, value: unknown[]): void => {
+        let array = value;
+        value.forEach((child, index) => {
+          if (!isPlainObject(child)) return;
+          schedule(child, next => {
+            if (next === child) return;
+            if (array === value) array = [...value];
+            array[index] = next;
+            set(key, array);
+          });
+        });
+      };
+      for (const key of ["properties", "patternProperties", "dependentSchemas", "dependencies", "$defs", "definitions"]) {
+        const value = source[key];
+        if (!isPlainObject(value)) continue;
+        let map = value;
+        for (const [name, child] of Object.entries(value)) {
+          if (!isPlainObject(child)) continue;
+          schedule(child, next => {
+            if (next === child) return;
+            if (map === value) map = { ...value };
+            Object.defineProperty(map, name, { value: next, writable: true, enumerable: true, configurable: true });
+            set(key, map);
+          });
+        }
+      }
+      for (const key of ["allOf", "anyOf", "oneOf", "prefixItems"]) {
+        const value = source[key];
+        if (Array.isArray(value)) completeArray(key, value);
+      }
+      for (const key of ["additionalProperties", "additionalItems", "unevaluatedProperties", "unevaluatedItems", "propertyNames", "contains", "not", "if", "then", "else", "items", "contentSchema"]) {
+        const value = source[key];
+        if (Array.isArray(value)) completeArray(key, value);
+        else if (isPlainObject(value)) schedule(value, next => set(key, next));
+      }
+    });
+  };
+  schedule(schema, completed => { result = completed; });
+  while (jobs.length > 0) jobs.pop()!();
+  return result;
+}
+
+function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean, strictResponsesToolSchemas: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
   // Runs for every Responses destination, forward auth included: the ChatGPT backend is where
   // the `\p{…}` rejection was observed, and it reaches this function through the same seam.
@@ -20,11 +86,11 @@ function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown
     const parameters = normalizeXaiToolParameters(isPlainObject(source.parameters) ? source.parameters : {});
     return parameters === undefined ? undefined : { ...source, parameters };
   }
-  if (isPlainObject(source.parameters) && source.parameters.type === "object") return source;
-  return {
-    ...source,
-    parameters: { ...(isPlainObject(source.parameters) ? source.parameters : {}), type: "object" },
-  };
+  const originalParameters = isPlainObject(source.parameters) ? source.parameters : {};
+  let parameters = originalParameters.type === "object"
+    ? originalParameters : { ...originalParameters, type: "object" };
+  if (strictResponsesToolSchemas) parameters = withCompletedRequired(parameters);
+  return parameters === originalParameters ? source : { ...source, parameters };
 }
 
 /**
@@ -73,7 +139,7 @@ function reconcileToolChoiceForOmittedTools(
   return body;
 }
 
-export function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown {
+export function normalizeToolSchemas(body: unknown, xaiTarget: boolean, strictResponsesToolSchemas = false): unknown {
   if (!isPlainObject(body)) return body;
 
   const omittedFunctionNames = new Set<string>();
@@ -81,11 +147,19 @@ export function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown
     let changed = false;
     const normalized: unknown[] = [];
     for (const tool of tools) {
-      const fixed = normalizeFunctionToolSchema(tool, xaiTarget);
+      let fixed = normalizeFunctionToolSchema(tool, xaiTarget, strictResponsesToolSchemas);
       if (fixed === undefined) {
         changed = true;
         if (isPlainObject(tool) && typeof tool.name === "string") omittedFunctionNames.add(tool.name);
         continue;
+      }
+      if (strictResponsesToolSchemas && isPlainObject(fixed) && fixed.type === "tool_search" && isPlainObject(fixed.parameters)) {
+        const parameters = withCompletedRequired(fixed.parameters);
+        if (parameters !== fixed.parameters) fixed = { ...fixed, parameters };
+      }
+      if (strictResponsesToolSchemas && isPlainObject(fixed) && fixed.type === "namespace" && Array.isArray(fixed.tools)) {
+        const nested = normalizeTools(fixed.tools);
+        if (nested !== fixed.tools) fixed = { ...fixed, tools: nested };
       }
       if (fixed !== tool) changed = true;
       normalized.push(fixed);

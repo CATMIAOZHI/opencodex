@@ -10,6 +10,7 @@ import type {
   OcxUsage,
 } from "../types";
 import { coerceIntegerToolArguments } from "../lib/tool-argument-integers";
+import { bindFullRequestCapture } from "../lib/request-capture-context";
 import {
   adapterFailureFromMessage,
   classifyError,
@@ -1566,13 +1567,14 @@ export function bridgeToResponsesSSE(
         }, heartbeatMs);
       };
 
+  const stepWithCapture = bindFullRequestCapture(step);
   return carryProxyIncompleteContext(proxyIncompleteContext, new ReadableStream<Uint8Array>({
     start(streamController) {
       controller = streamController;
       startStream();
     },
     pull() {
-      return step();
+      return stepWithCapture();
     },
     cancel() {
       // Client (Codex) disconnected. Stop emitting and let the caller abort the upstream fetch so a

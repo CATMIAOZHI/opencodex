@@ -2,9 +2,9 @@
  * Anthropic image normalization: resize/re-encode images to fit Anthropic's request
  * limits instead of dropping them (devlog/260714_image_normalization_pipeline/020).
  *
- * Age-tier pyramid: newest images keep near-full fidelity, older images become
- * progressively smaller JPEG thumbnails, so a whole session's screenshots stay visible
- * under the request byte budget. An aggregate demotion loop re-encodes the OLDEST
+ * Every image starts at the same quality tier, independent of history age or other
+ * requests. Only per-image limits, aggregate budget, or an explicit retry bias lower
+ * quality. An aggregate demotion loop re-encodes the OLDEST
  * not-yet-terminal image one ladder position at a time until the total fits; only when
  * every image is terminal-floored does the guard's Rule 4 (textify) fire as backstop.
  *
@@ -28,8 +28,7 @@ export { IMAGE_NORMALIZE_CACHE_MAX_BYTES } from "./anthropic-image-codec";
 export { getNormalizeStatsForTests, resetNormalizeStateForTests, setNormalizeCacheLimitsForTests } from "./anthropic-image-codec";
 export { anthropicImageNormalizeRetainedStoreSnapshot, evictOldestAnthropicImageNormalizeForBudget } from "./anthropic-image-codec";
 
-import { bunImageEncode, bunImageValidate, processAt, TERMINAL_POS, TIER0_COUNT, TIER1_COUNT } from "./anthropic-image-codec";
-import { recordedEmittedPosition, recordEmittedPosition } from "./anthropic-image-codec";
+import { bunImageEncode, bunImageValidate, processAt, TERMINAL_POS } from "./anthropic-image-codec";
 import { IMAGE_NORMALIZE_CONCURRENCY, MAX_INPUT_BASE64_LENGTH, MAX_INPUT_PIXELS } from "./anthropic-image-codec";
 import type { NormalizeOptions } from "./anthropic-image-codec";
 
@@ -81,11 +80,6 @@ function textify(ref: ImageBlockRef, text: string): void {
 
 function replaceImage(ref: ImageBlockRef, data: string, mediaType: string): void {
   ref.container[ref.index] = { type: "image", source: { type: "base64", media_type: mediaType, data }, ...cacheControlOf(ref) };
-}
-
-function initialPosition(newestFirstIndex: number, bias: number): number {
-  const base = newestFirstIndex < TIER0_COUNT ? 0 : newestFirstIndex < TIER0_COUNT + TIER1_COUNT ? 1 : 2;
-  return Math.min(base + Math.max(0, bias), TERMINAL_POS);
 }
 
 
@@ -166,15 +160,6 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
   // peak memory, not throughput (native encode parallelism lives below this layer).
   // entries[] stays index-addressed, so completion order never affects output order
   // or the sequential demotion loop below.
-  // #4532: snapshot every target's recorded emitted position BEFORE any worker
-  // starts. The read used to happen inside the worker loop, so a concurrent request
-  // (or this request's own earlier encodes) could fill the position store's
-  // entry-count cap and evict an entry between collection and processing — a later
-  // occurrence then fell back to an age-derived tier and busted the prompt prefix
-  // cache. Reading a fixed pre-pass snapshot keeps every occurrence on the position
-  // it had when this request started.
-  const recordedPositions = targets.map(t =>
-    !t.base64 ? undefined : recordedEmittedPosition(t.base64, t.mediaType.toLowerCase()));
   let nextIndex = 0;
   let firstError: unknown;
   let failed = false;
@@ -207,24 +192,10 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
         continue;
       }
       const sourceMedia = target.mediaType.toLowerCase();
-      // #4532: pin the start position to the image's own identity. A never-seen
-      // image still gets the age-derived tier; a seen image resumes where it last
-      // EMITTED, so appending a newer image cannot re-encode history and bust
-      // Anthropic's prompt prefix cache. tierBias (413 retry) applies on top of
-      // either base and still clamps to TERMINAL_POS.
-      //
-      // Every read sees the pre-request snapshot taken above: nothing is written
-      // until the whole request settles (see the record loop at the end), and no
-      // mid-pass eviction can change what an occurrence sees. That is
-      // load-bearing, not incidental: an image can appear more than once in one
-      // history, and identity keying collapses those occurrences onto one entry.
-      // Writing during the pass let the OLDEST occurrence's tier win a race
-      // against the newest one and drag it down — 30 copies of a screenshot all
-      // landed on the oldest copy's tier instead of the age pyramid. Reading a
-      // fixed snapshot gives each occurrence its own age tier on a cold store,
-      // which is the pre-#4532 behaviour.
-      const recorded = recordedPositions[i];
-      const pos = Math.min((recorded ?? initialPosition(newestFirstIndex, 0)) + Math.max(0, bias), TERMINAL_POS);
+      // Do not retain a tier by image identity: duplicate occurrences can finish at
+      // different tiers, and merging them changes the next identical request's bytes.
+      // The encoded-result cache remains shared, but never controls tier selection.
+      const pos = Math.min(Math.max(0, bias), TERMINAL_POS);
       const result = await process(b64, pos, sourceMedia);
       if (result.kind === "failed") {
         target.drop(UNDECODABLE_TEXT);
@@ -291,16 +262,6 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
     entry.size = newSize;
     entry.pos = result.pos;
     entry.done = result.pos >= TERMINAL_POS;
-  }
-
-  // #4532: commit the positions these images actually went out at, now that the
-  // first pass and the aggregate demotion loop have both settled. Written here
-  // rather than inline so every read above saw one consistent pre-request
-  // snapshot. `recordEmittedPosition` keeps the deeper of the stored and the new
-  // position, so a repeated image converges on the most-demoted tier it was ever
-  // emitted at and never moves back up.
-  for (const entry of entries) {
-    if (entry) recordEmittedPosition(entry.sourceB64, entry.sourceMedia, entry.pos);
   }
 
   // Terminal overflow (050 audit round 1, blocker 3): with no downstream guard, drop

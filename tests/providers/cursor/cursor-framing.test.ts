@@ -180,7 +180,9 @@ describe("Cursor Connect envelope framing", () => {
     const input = new Uint8Array(first.byteLength + second.byteLength);
     input.set(first, 0);
     input.set(second, first.byteLength);
-    const budget = createTranslatorBudget();
+    // Pinned explicitly: the scenario needs the production 32 MiB turn cap to bind on
+    // retained 20 MiB + transient frame copies.
+    const budget = createTranslatorBudget({ maxTurnBytes: 32 * 1024 * 1024 });
     budget.chargeRetained(2 * payloadBytes, { kind: "cursor_transport" });
 
     expect(() => decodeAvailableConnectFrames(

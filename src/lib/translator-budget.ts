@@ -1,8 +1,39 @@
 import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable } from "./upstream-retry";
 
-export const TRANSLATOR_MAX_CALL_ARGUMENT_BYTES = 2 * 1024 * 1024;
-export const TRANSLATOR_MAX_TURN_BYTES = 32 * 1024 * 1024;
-export const TRANSLATOR_MAX_SSE_EVENT_BYTES = 32 * 1024 * 1024;
+/**
+ * Fork-local raise from the upstream 32 MiB / 32 MiB / 2 MiB. Every limit below is still a hard
+ * bound that fails the turn with a typed `translation_buffer_limit` error; only the numbers move.
+ *
+ * The turn cap is five times the default 256 MiB inbound limit, leaving room for retained
+ * translation and transient JSON/wire copies. The opt-in 512 MiB inbound ceiling does not
+ * guarantee translation admission: each route still shares this finite turn budget.
+ * Keeping the constant here avoids making this leaf depend on server admission code.
+ *
+ * That alignment covers the request-copies accounting for one body. Signature-heavy replays share
+ * the same turn budget through separate multipliers: `src/claude/inbound.ts` retains twice each
+ * encrypted signature it replays, and `src/responses/reasoning-envelope.ts` reserves up to eight
+ * times an already-encoded envelope while decoding it. A body dominated by extended-thinking
+ * signatures can therefore still overflow below the front-door cap — a typed 413, never a
+ * truncated success.
+ *
+ * This is also the wall the fork cares about: the command-code adapter decodes NDJSON with no
+ * per-record ceiling, so the turn budget is the only bound on that path. One pathological single
+ * record (33 MiB, no newline) reserved more than the upstream 32 MiB cap in one `reserveTransient`
+ * and ended the turn with `live_transient` after 15-22s of upstream work and zero tokens
+ * delivered; eight such failures were observed, all on command-code/deepseek-v4.1-flash with
+ * `effort=max`.
+ *
+ * SSE event cap: a single event may legitimately carry an inline image, and the decoder accounts
+ * roughly three times the event size while the source line and the decoded value overlap, so
+ * 128 MiB stays reachable under the turn cap (3 * 128 MiB = 384 MiB) and remains the guard that
+ * fires first for an oversized single record instead of the turn cap.
+ *
+ * Call-argument cap: 16 MiB admits a single tool call carrying inline image or file data. A turn
+ * with many interleaved calls is still bounded by the turn cap above.
+ */
+export const TRANSLATOR_MAX_CALL_ARGUMENT_BYTES = 16 * 1024 * 1024;
+export const TRANSLATOR_MAX_TURN_BYTES = 5 * 256 * 1024 * 1024;
+export const TRANSLATOR_MAX_SSE_EVENT_BYTES = 128 * 1024 * 1024;
 export const CURSOR_MAX_CONNECT_FRAME_BYTES = 32 * 1024 * 1024;
 export const CURSOR_MAX_EFFECTIVE_CONNECT_PAYLOAD_BYTES = 16 * 1024 * 1024;
 export const CURSOR_TRANSPORT_MAX_BUFFERED_BYTES = 32 * 1024 * 1024;

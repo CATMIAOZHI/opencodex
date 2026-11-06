@@ -1,6 +1,7 @@
-const MAX_CACHE_BYTES = 8 * 1024 * 1024;
+const MAX_CACHE_BYTES = 128 * 1024 * 1024;
 const MAX_CONCURRENT_RECOVERIES = 32;
-const CACHE_TTL_MS = 15 * 60 * 1000;
+const CACHE_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_RECOVERY_CACHE_ENTRIES = 2_000;
 
 export type AgentTaskRecoveryResolutionFailureReason =
   | "recovery_unavailable"
@@ -54,6 +55,20 @@ function sweepRecoveryCache(now: number, maxEntries: number): void {
   }
 }
 
+/** Authorized replay keeps the same plaintext alive without another provider call. */
+function touchRecoveryCacheEntry(key: string, entry: RecoveryCacheEntry): void {
+  if (entry.expiryTimer) clearTimeout(entry.expiryTimer);
+  entry.expiresAt = Date.now() + CACHE_IDLE_TTL_MS;
+  const timer = setTimeout(() => {
+    // A superseded timer must not remove an entry whose idle deadline was renewed.
+    if (entry.expiryTimer === timer) deleteRecoveryCacheEntry(key, entry);
+  }, CACHE_IDLE_TTL_MS);
+  entry.expiryTimer = timer;
+  timer.unref?.();
+  RECOVERY_CACHE.delete(key);
+  RECOVERY_CACHE.set(key, entry);
+}
+
 function insertRecoveryCacheEntry(key: string, assignment: string, maxEntries: number): void {
   const replaced = RECOVERY_CACHE.get(key);
   if (replaced) deleteRecoveryCacheEntry(key, replaced);
@@ -61,15 +76,10 @@ function insertRecoveryCacheEntry(key: string, assignment: string, maxEntries: n
   const entry: RecoveryCacheEntry = {
     assignment,
     bytes: Buffer.byteLength(assignment),
-    expiresAt: insertedAt + CACHE_TTL_MS,
+    expiresAt: insertedAt + CACHE_IDLE_TTL_MS,
     expiryTimer: null,
   };
-  entry.expiryTimer = setTimeout(
-    () => deleteRecoveryCacheEntry(key, entry),
-    CACHE_TTL_MS,
-  );
-  entry.expiryTimer.unref?.();
-  RECOVERY_CACHE.set(key, entry);
+  touchRecoveryCacheEntry(key, entry);
   recoveryCacheBytes += entry.bytes;
   sweepRecoveryCache(insertedAt, maxEntries);
 }
@@ -151,7 +161,7 @@ export async function resolveCachedAgentTaskRecoveryWithResult(
 ): Promise<AgentTaskRecoveryResolution> {
   if (abortSignal?.aborted) return { recovered: false, reason: "caller_cancelled" };
   sweepRecoveryCache(Date.now(), maxEntries);
-  const cached = RECOVERY_CACHE.get(key)?.assignment;
+  const cached = cachedAgentTaskRecovery(key);
   if (cached) return { recovered: true, assignment: cached };
   const flight = startRecoveryFlight(key, maxEntries, request);
   return flight ? waitForRecoveryFlight(flight, abortSignal) : { recovered: false, reason: "recovery_unavailable" };
@@ -179,7 +189,7 @@ export function agentTaskRecoveryCacheSnapshotForTests(): { entries: number; byt
   return { entries: RECOVERY_CACHE.size, bytes: recoveryCacheBytes };
 }
 
-/** Read an existing recovery without starting a request or extending its lifetime. */
+/** Reuse an admitted recovery and renew its idle deadline/LRU position, without a request. */
 export function cachedAgentTaskRecovery(key: string): string | null {
   const entry = RECOVERY_CACHE.get(key);
   if (!entry) return null;
@@ -187,5 +197,6 @@ export function cachedAgentTaskRecovery(key: string): string | null {
     deleteRecoveryCacheEntry(key, entry);
     return null;
   }
+  touchRecoveryCacheEntry(key, entry);
   return entry.assignment;
 }

@@ -5,6 +5,7 @@ import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
 import { captureUpstreamTerminalDiagnostics, upstreamDiagnosticLogFields, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
+import { captureRequestResult } from "../usage/full-request-capture";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
@@ -1523,6 +1524,7 @@ function writeFinalRequestLog(
     wireParsed: logCtx.usageWireParsed === true,
   });
   const logicalRequestId = logCtx.logicalRequestId ?? logCtx.executionBudget?.logicalRequestId;
+  captureRequestResult(logCtx, requestId, effectiveStatus, loggedUsage);
   const normalizedCacheValue = loggedUsage?.cacheReadInputTokens ?? loggedUsage?.cachedInputTokens;
   cacheDiagnosticHooks()?.finalize({
     requestId,

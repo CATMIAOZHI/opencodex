@@ -49,17 +49,18 @@ describe("Codex tool mode configuration (#2106)", () => {
     expect(Object.hasOwn(shellEntry, "tool_mode")).toBe(false);
   });
 
-  test("buildCatalogEntries preserves tool_mode = code_mode_only by default", () => {
+  test("buildCatalogEntries applies the operator's global direct policy", () => {
     const entries = buildCatalogEntries(null, [], [
       { id: "deepseek-v4-flash", provider: "deepseek" },
     ]);
     const deepseekEntry = entries.find(e => e.slug === "deepseek/deepseek-v4-flash");
     expect(deepseekEntry).toBeDefined();
-    expect(deepseekEntry?.tool_mode).toBe("code_mode_only");
+    expect(deepseekEntry?.tool_mode).toBe("direct");
+    expect(deepseekEntry?.multi_agent_version).toBe("v2");
     expect(deepseekEntry?.shell_type).toBe("unified_exec");
   });
 
-  test("buildCatalogEntries leaves tool_mode unset when codexToolMode is shell", () => {
+  test("the global operator policy overrides a per-model shell catalog hint", () => {
     const entries = buildCatalogEntries(null, [], [
       {
         id: "deepseek-v4-flash",
@@ -69,7 +70,8 @@ describe("Codex tool mode configuration (#2106)", () => {
     ]);
     const deepseekEntry = entries.find(e => e.slug === "deepseek/deepseek-v4-flash");
     expect(deepseekEntry).toBeDefined();
-    expect(deepseekEntry?.tool_mode).toBeUndefined();
+    expect(deepseekEntry?.tool_mode).toBe("direct");
+    expect(deepseekEntry?.multi_agent_version).toBe("v2");
     expect(deepseekEntry?.shell_type).toBe("unified_exec");
   });
 
@@ -188,7 +190,7 @@ describe("Codex tool mode configuration (#2106)", () => {
     expect(model.codexToolMode).toBe("code_mode_only");
   });
 
-  test("buildCatalogEntries with codexForwardNativeCapabilityAlias applies codexToolMode = shell", () => {
+  test("the global operator policy also overrides shell on a native capability alias", () => {
     const { buildCatalogEntries, NATIVE_DAYBREAK_BLUE_MODEL, upstreamNativeEntry } = require("../../src/codex/catalog");
     const { CODEX_CUSTOM_MODEL_CATALOG_KIND, findNativeTemplate } = require("../../src/codex/catalog/parsing");
     const nativeTemplate = () => findNativeTemplate({ models: [upstreamNativeEntry("gpt-5.6-sol")!] });
@@ -202,7 +204,8 @@ describe("Codex tool mode configuration (#2106)", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], models);
     const daybreak = entries.find((entry: any) => entry.slug === `openai/${NATIVE_DAYBREAK_BLUE_MODEL}`);
     expect(daybreak).toBeDefined();
-    expect(daybreak?.tool_mode).toBeUndefined();
+    expect(daybreak?.tool_mode).toBe("direct");
+    expect(daybreak?.multi_agent_version).toBe("v2");
     expect(daybreak?.use_responses_lite).toBe(true);
   });
 });

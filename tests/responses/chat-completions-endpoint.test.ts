@@ -8,12 +8,12 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../../src/chat/inbound";
 import { chatCompletionsUsage } from "../../src/chat/outbound";
 import { parseRequest } from "../../src/responses/parser";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
-import type { TranslatorBudget } from "../../src/lib/translator-budget";
+import { TRANSLATOR_MAX_SSE_EVENT_BYTES, type TranslatorBudget } from "../../src/lib/translator-budget";
 import {
   resetProviderRequestPacingForTest,
   setProviderRequestPacingRuntimeForTest,
@@ -74,16 +74,16 @@ beforeEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-afterEach(() => {
+afterEach(async () => {
   releaseSpendHome?.();
   releaseSpendHome = undefined;
   resetProviderRequestPacingForTest();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  globalThis.fetch = originalFetch;
-  if (testDir) removeTreeWithRetry(testDir);
+  try { if (testDir) await removeTreeAfterBackgroundWork(testDir); } finally {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    isolatedCodexHome?.restore(); isolatedCodexHome = null;
+    globalThis.fetch = originalFetch;
+  }
 });
 
 function mockChatUpstream() {
@@ -672,10 +672,9 @@ test("large image chat-completions request remains within its bounded replay bud
   }
 });
 
-test("chat-completions replay copy overflow returns JSON 413", async () => {
-  // The serialized replay body is the one retained request copy. A payload above
-  // the 32 MiB turn limit must remain a structured client error.
-  saveConfig(mockConfig("http://127.0.0.1:1/v1"));
+test("chat-completions replay copy admits a body above the former 32 MiB turn limit", async () => {
+  const upstream = mockChatUpstream();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
@@ -687,18 +686,36 @@ test("chat-completions replay copy overflow returns JSON 413", async () => {
         messages: [{ role: "user", content: "x".repeat(33 * 1024 * 1024) }],
       }),
     });
-    expect(response.status).toBe(413);
-    expect(response.headers.get("content-type") ?? "").toContain("application/json");
-    const json = await response.json() as { error?: { message?: string; type?: string; code?: string } };
-    expect(json.error).toMatchObject({
-      message: "request translation buffer exceeded the safe limit",
-      type: "request_too_large",
-      code: "translation_buffer_limit",
-    });
+    expect(response.status).toBe(200);
   } finally {
     await server.stop(true);
+    upstream.stop(true);
   }
-});
+}, 30_000);
+
+test("chat-completions translation overflow still maps to a structured 413", async () => {
+  const { handleChatCompletions } = await import("../../src/server/chat-completions");
+  const budgets = await import("../../src/lib/translator-budget");
+  const createBudget = budgets.createTranslatorBudget;
+  const factory = spyOn(budgets, "createTranslatorBudget").mockImplementation(() => createBudget({ maxTurnBytes: 4096 }));
+  const config = mockConfig("http://127.0.0.1:1/v1");
+  saveConfig(config);
+  try {
+    const body = JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "x".repeat(8 * 1024) }] });
+    const request = new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" }, body });
+    const response = await handleChatCompletions(request, config, { model: "", provider: "" },
+      { requestId: `req_chat_overflow_${Date.now()}`, start: Date.now() });
+    expect(response.status).toBe(413);
+    expect(response.headers.get("content-type") ?? "").toContain("application/json");
+    expect(await response.json()).toMatchObject({ error: {
+      message: "request translation buffer exceeded the safe limit",
+      type: "request_too_large", code: "translation_buffer_limit",
+    } });
+  } finally {
+    factory.mockRestore();
+  }
+}, 30_000);
 
 test("chatCompletionsToResponsesBody maps response_format and rejects unknown types", () => {
   const jsonObject = chatCompletionsToResponsesBody({
@@ -1360,7 +1377,7 @@ test("chat-native streaming bounds an oversized unterminated SSE event", async (
     fetch() {
       calls += 1;
       if (calls === 1) {
-        return new Response(`data: ${"x".repeat(33 * 1024 * 1024)}`, {
+        return new Response(`data: ${"x".repeat(TRANSLATOR_MAX_SSE_EVENT_BYTES + 1)}`, {
           headers: { "content-type": "text/event-stream" },
         });
       }
@@ -1392,7 +1409,7 @@ test("chat-native streaming bounds an oversized unterminated SSE event", async (
     await server.stop(true);
     upstream.stop(true);
   }
-});
+}, 30_000);
 
 test("chat-native redacts structured provider errors before returning them", async () => {
   const echoedSecret = "Authorization: Bearer opaquecredential123456";

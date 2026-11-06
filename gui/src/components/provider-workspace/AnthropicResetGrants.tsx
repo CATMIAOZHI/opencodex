@@ -191,6 +191,22 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
     if (confirming) primaryRef.current?.focus();
   }, [confirming]);
 
+  /**
+   * The roster read is a snapshot taken when the provider panel mounted, and the
+   * 5-hour wall can be reached while this dialog is still closed. Re-read once on
+   * open so a ticket that appeared in the meantime is offered here. An entry that is
+   * still loading is left alone: its answer is already on the way.
+   */
+  const reReadOnOpen = useRef(false);
+  useEffect(() => {
+    if (reReadOnOpen.current) return;
+    reReadOnOpen.current = true;
+    // Silent: the open-time read must not turn a known-good snapshot into an error on
+    // a dropped socket, and must not hide a pending operation. A definitive answer
+    // (4xx, or a 2xx body we cannot read) still replaces it.
+    if (entry !== undefined && entry.status !== "loading") void controller.refresh(accountId, { silent: true });
+  }, [accountId, controller, entry]);
+
   const handleCancel = useCallback((event: React.SyntheticEvent) => {
     event.preventDefault();
     onClose();
@@ -204,6 +220,7 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
   const unresolved: Held | null = held
     ?? (pending ? { grantId: pending.grantId, operationId: pending.operationId } : null);
   const next = snapshot ? spendableGrant(snapshot) : undefined;
+  const juniperOffer = snapshot?.juniperOffer ?? null;
 
   const startConfirm = () => {
     if (!next || unresolved) return;
@@ -238,6 +255,36 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
     setChecking(true);
     await controller.refresh(accountId);
     setChecking(false);
+  };
+
+  /**
+   * Why no ticket is on offer. The route returns this shape for both `eligible:
+   * false` and `eligible: true` with an empty list, and both deserve the same
+   * explanation. `not_at_wall` is the reason worth restating: it means "come back
+   * when the 5-hour window fills", not "this account never gets resets".
+   */
+  const noTicketNotice = (fallbackKey: TKey, unconfirmedKey?: TKey) => {
+    // A null offer means the proxy could not confirm juniper at all, so the verdict the
+    // caller would otherwise state is replaced by "unconfirmed". `not_at_wall` wins over
+    // both: that is a reason, not an absence.
+    const line: TKey = unconfirmedKey !== undefined && juniperOffer === null
+      ? unconfirmedKey
+      : juniperOffer?.reason === "not_at_wall" ? "anthropicGrant.requiresLimit" : fallbackKey;
+    return (
+      <>
+        <p className="faint">{t(line)}</p>
+        {juniperOffer?.reason === "not_at_wall" && juniperOffer.fiveHourPercent !== null && (
+          <p className="faint text-caption">
+            {t("anthropicGrant.windowFiveHour", { percent: String(juniperOffer.fiveHourPercent) })}
+          </p>
+        )}
+        <button type="button" className="btn btn-ghost" data-anthropic-grant-reread
+          style={{ marginTop: 12 }}
+          onClick={() => { void recheck(); }} disabled={checking || busy}>
+          {checking ? t("anthropicGrant.checking") : t("anthropicGrant.checkResult")}
+        </button>
+      </>
+    );
   };
 
   const message = (result: Outcome) => (
@@ -315,7 +362,7 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
                   </button>
                 </>
               ) : !entry.snapshot.eligible ? (
-                <p className="faint">{t("anthropicGrant.ineligible")}</p>
+                noTicketNotice("anthropicGrant.ineligible", "anthropicGrant.unconfirmed")
               ) : entry.snapshot.grants.length > 0 ? (
                 <>
                   <p style={{ marginBottom: 12 }}>{t("anthropicGrant.available", { count: String(total) })}</p>
@@ -333,8 +380,8 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
                 </>
               ) : (
                 <>
-                  <p className="faint">{t("anthropicGrant.none")}</p>
-                  <p className="modal-desc">{t("anthropicGrant.desc")}</p>
+                  {noTicketNotice("anthropicGrant.none", "anthropicGrant.unconfirmed")}
+                  <p className="modal-desc" style={{ marginTop: 8 }}>{t("anthropicGrant.desc")}</p>
                 </>
               )}
               {outcome && message(outcome)}

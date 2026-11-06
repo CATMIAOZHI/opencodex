@@ -61,14 +61,14 @@ const reserve: RawEntry = {
   default_reasoning_level: "xhigh",
 };
 
-test.each(["v1", "v2"] as const)("reviewer receives explicit %s mode in build and merge", mode => {
-  expect(reviewRow(build({ multiAgentMode: mode })).multi_agent_version).toBe(mode);
-  expect(reviewRow(merge([], true, { multiAgentMode: mode })).multi_agent_version).toBe(mode);
+test.each(["v1", "v2"] as const)("reviewer retains the global direct/V2 policy with requested %s mode", mode => {
+  expect(reviewRow(build({ multiAgentMode: mode }))).toMatchObject({ tool_mode: "direct", multi_agent_version: "v2" });
+  expect(reviewRow(merge([], true, { multiAgentMode: mode }))).toMatchObject({ tool_mode: "direct", multi_agent_version: "v2" });
 });
 
-test("reviewer follows the native v1 exception to explicit v2 mode", () => {
-  expect(reviewRow(build({ keepNativeChatGptOnV1: true })).multi_agent_version).toBe("v1");
-  expect(reviewRow(merge([], true, { keepNativeChatGptOnV1: true })).multi_agent_version).toBe("v1");
+test("reviewer retains the global V2 policy despite the native v1 exception", () => {
+  expect(reviewRow(build({ keepNativeChatGptOnV1: true })).multi_agent_version).toBe("v2");
+  expect(reviewRow(merge([], true, { keepNativeChatGptOnV1: true })).multi_agent_version).toBe("v2");
 });
 
 test("Reserve-only or native-less final catalogs omit persisted reviewers in both writers", () => {
@@ -153,7 +153,7 @@ test("merge preserves the first live row over duplicate persisted/generated rows
     baselineCatalogModels: [{ ...structuredClone(upstream), display_name: "Baseline" }],
     routedEntries: [structuredClone(upstream)],
   });
-  const expected = { ...before, visibility: "hide", multi_agent_version: "v2", opencodex_multi_agent_version_origin: "v1" };
+  const expected = { ...before, visibility: "hide", tool_mode: "direct", multi_agent_version: "v2", opencodex_multi_agent_version_origin: "v1" };
   delete expected.prefer_websockets;
   expect(reviewRow(rows)).toEqual(expected);
   expect(live).toEqual(before);
@@ -303,6 +303,6 @@ for (const writer of ["retained-sync", "convergence"] as const) {
           } else expect(rows).toEqual([]);
         }
       } finally { rmSync(root, { recursive: true, force: true }); }
-    });
+    }, process.platform === "win32" ? 15_000 : 5_000);
   }
 }

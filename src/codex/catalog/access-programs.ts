@@ -29,7 +29,10 @@ export function applyNativeAccessPrograms(
       && SUPPORTED_NATIVE_OPENAI_SLUGS.has(entry.slug) ? entry.slug : undefined;
     const slug = accountBoundSlug ?? bareSlug;
     if (!slug) continue;
-    if (accountBoundSlug) delete entry.availability_nux;
+    // Re-append account metadata after the fork's final V2 normalization, so
+    // retained and freshly built rows keep identical JSON key order.
+    delete entry.availability_nux;
+    delete entry.available_access_programs;
     const selector = accountBoundSlug && typeof entry.slug === "string"
       ? entry.slug.slice(0, entry.slug.indexOf("/")) : undefined;
     const target = selector === undefined ? MAIN_CODEX_ACCOUNT_ID : accountTargets.get(selector);

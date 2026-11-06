@@ -25,6 +25,7 @@ function carriesTranslatableWords(value: string): boolean {
 }
 
 const INTENTIONAL_ENGLISH = new Set<TKey>([
+  "usage.daily.date", // "Date" is also the French word for a calendar date.
   "nav.claude", // Product name.
   "nav.codexSet", // Product name: the sidebar row reads "Codex" in every locale.
   "kiroLogin.iam", // AWS product name, retained in the original spelling.

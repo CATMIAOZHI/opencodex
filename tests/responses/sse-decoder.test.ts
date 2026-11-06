@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { decodeServerSentEvents } from "../../src/lib/sse-decoder";
 import {
   TRANSLATOR_MAX_SSE_EVENT_BYTES,
-  TRANSLATOR_MAX_TURN_BYTES,
   createTranslatorBudget,
 } from "../../src/lib/translator-budget";
 
@@ -89,7 +88,7 @@ describe("text/event-stream decoder", () => {
     expect("kind" in records[0]).toBe(false);
   });
 
-  test("admits 17 MiB and exact 32 MiB logical events while accounting source/value overlap", async () => {
+  test("admits a sub-cap and an exact-cap logical event while accounting source/value overlap", async () => {
     for (const size of [17 * 1024 * 1024, TRANSLATOR_MAX_SSE_EVENT_BYTES]) {
       const payload = "x".repeat(size);
       const translatorBudget = createTranslatorBudget({ maxTurnBytes: 4 * TRANSLATOR_MAX_SSE_EVENT_BYTES });
@@ -109,7 +108,7 @@ describe("text/event-stream decoder", () => {
     }
   }, 60_000);
 
-  test("rejects an SSE event one byte over 32 MiB", async () => {
+  test("rejects an SSE event one byte over the cap", async () => {
     const payload = "x".repeat(TRANSLATOR_MAX_SSE_EVENT_BYTES + 1);
     const translatorBudget = createTranslatorBudget({ maxTurnBytes: 4 * TRANSLATOR_MAX_SSE_EVENT_BYTES });
     try {
@@ -125,7 +124,9 @@ describe("text/event-stream decoder", () => {
   }, 60_000);
 
   test("rejects a 20 MiB event while the consumer turn already retains 20 MiB", async () => {
-    const translatorBudget = createTranslatorBudget();
+    // Pinned explicitly: the assertion is about the turn cap binding on retained + transient
+    // accounting, not about where the production cap currently sits.
+    const translatorBudget = createTranslatorBudget({ maxTurnBytes: 32 * 1024 * 1024 });
     const retained = 20 * 1024 * 1024;
     translatorBudget.chargeRetained(retained, { kind: "retained_collectors" });
     try {
@@ -136,7 +137,7 @@ describe("text/event-stream decoder", () => {
           { translatorBudget },
         )) records.push(record);
       }).toThrow(expect.objectContaining({ code: "translation_buffer_limit" }));
-      expect(translatorBudget.snapshot().highWaterBytes).toBeLessThanOrEqual(TRANSLATOR_MAX_TURN_BYTES);
+      expect(translatorBudget.snapshot().highWaterBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
       expect(records).toHaveLength(0);
     } finally {
       translatorBudget.dispose();

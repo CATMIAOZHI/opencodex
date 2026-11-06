@@ -1,0 +1,9 @@
+{
+  "usage-cost-extended-cache.test.ts": "usage",
+  "codex-catalog-deepseek-profile.test.ts": "codex-integration",
+  "codex-catalog-global-direct-v2.test.ts": "codex-integration",
+  "opencode-go-responses-tool-schema.test.ts": "providers",
+  "provider-quota-probe-deadline.test.ts": "providers",
+  "service-definition-atomic.test.ts": "service",
+  "full-request-capture.test.ts": "usage"
+}

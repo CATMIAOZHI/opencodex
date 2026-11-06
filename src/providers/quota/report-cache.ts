@@ -146,6 +146,12 @@ function cacheKey(config: OcxConfig): string {
 
 export type CodexAuthAccountsSnapshotPromise = ReturnType<typeof listCodexAuthAccountsSnapshot>;
 
+/** Synchronous config fence for deadline fallback; pool aggregation still needs a fresh snapshot. */
+export function providerQuotaCacheMatchesConfig(key: string, config: OcxConfig): boolean {
+  const base = cacheKey(config);
+  return hasCodexPoolProvider(config) ? key.startsWith(`${base}|codex-pool:`) : key === base;
+}
+
 export function hasCodexPoolProvider(config: OcxConfig): boolean {
   return Object.entries(config.providers).some(([name, provider]) => (
     provider.disabled !== true
