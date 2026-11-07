@@ -43,6 +43,7 @@ import { recordAttemptRequestedEffort } from "../request-log";
 import type { ResolvedFastPolicy } from "../../providers/fastwire";
 import { applyDroidResponsesReasoningDefault } from "../droid-reasoning-default";
 import { applyXaiOauthFastModel, xaiOauthFastModelForDecision } from "../../providers/xai-fast-model";
+import { codexClaudeFastMode, type CodexClaudeFastControl } from "./codex-claude-fast";
 
 /** Preview the billed xAI lane without mutating request state or resolving credentials. */
 export function previewXaiOauthWireModel(
@@ -136,6 +137,7 @@ export async function resolveSubagentFallbackModelEligibility(args: {
  * Must run only after subagent fallback has settled the model/provider.
  */
 export async function applyFinalRouteRequestNormalization(args: {
+  codexFastControl?: CodexClaudeFastControl;
   parsed: OcxParsedRequest;
   route: RouteResult;
   config: OcxConfig;
@@ -268,14 +270,15 @@ export async function applyFinalRouteRequestNormalization(args: {
   );
   const modelServiceTierSupport = serviceTierSupportFromPolicy(fastPolicy);
   const callerTier = parsed.options.serviceTier;
+  const fastMode = codexClaudeFastMode(config, args.codexFastControl, route.provider, route.modelId);
   // Capture destination evidence policy separately from the unchanged outbound Fast decision.
   parsed.options.tierObservation = tierObservationContext(
     fastPolicy,
-    config.fastMode,
+    fastMode,
     callerTier,
     responseTierAuthorityForProvider(route.provider),
   );
-  parsed.options.tierDecision = decideTier(fastPolicy, config.fastMode, callerTier);
+  parsed.options.tierDecision = decideTier(fastPolicy, fastMode, callerTier);
   parsed.options.serviceTier = tierValueAfterDecision(parsed.options.tierDecision, callerTier);
   if (fastPolicy.capability === true && fastPolicy.fastWire === null) {
     warnFastWireCapabilityGap(route.providerName, route.modelId);

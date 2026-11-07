@@ -410,6 +410,13 @@
       ]
     },
     {
+      "path": "transports/codex-claude-fast.md",
+      "tier": 3,
+      "title": "Codex Claude Fast Control",
+      "scope": "Fork-local Claude standard-speed requests with per-conversation native GPT worker Fast control.",
+      "documents": ["src/config/", "src/types/", "src/server/"]
+    },
+    {
       "path": "transports/responses-wire-shapes.md",
       "tier": 3,
       "title": "Responses Wire Shapes",

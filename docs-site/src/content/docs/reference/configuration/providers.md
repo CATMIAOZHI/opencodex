@@ -830,10 +830,27 @@ a global `fastMode: true`. Claude Code native passthrough still forwards a `spee
 sends itself (for example Claude Code `/fast`), because that request never reaches the proxy's Fast
 policy. Cursor Fast and other providers are unaffected.
 
-When enabled, an eligible `--fast` or Fast selector sends
+Outside the fork-specific Codex behavior below, an eligible `--fast` or Fast selector sends
 `speed: "fast"` and adds `fast-mode-2026-02-01` to the existing `anthropic-beta` header. The proxy
 preserves OAuth beta values and sends one deduplicated header. `fastMode: false` disables this
 injection.
+
+#### Claude Fast in this fork
+
+`codexClaudeFastSubagentsOnly` defaults to `true`. Keep the Anthropic provider's
+`fastEnabled: true` to retain Claude's Fast button in Codex. For identified Codex Responses
+requests, Claude always uses standard speed. With the button on, native ChatGPT GPT subagents
+in that conversation request priority; with it off, those workers request standard speed.
+Reasoning effort is unchanged. This per-conversation rule takes precedence over global `fastMode`;
+provider capability restrictions still apply.
+
+A toggle reaches the proxy with the next main-conversation request. Existing workers follow it
+on subsequent requests, including when their own inherited setting is stale; in-flight requests
+cannot change speed. State is isolated by caller and session, held in memory for up to 24 hours
+without a main-conversation update, and limited to 2048 conversations. After a proxy restart or
+eviction, workers use their ordinary request settings until another Claude main request arrives.
+Unknown conversations, third-party GPT gateways, and Claude Code's Messages requests retain
+their existing behavior. Set `codexClaudeFastSubagentsOnly: false` to restore upstream behavior.
 
 Anthropic's `usage.speed` echo determines the outcome: `fast` confirms Fast, `standard` records a
 downgrade, and a missing echo is unconfirmed. Only confirmed Fast usage receives the 2x list-price

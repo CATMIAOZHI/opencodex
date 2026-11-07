@@ -295,6 +295,7 @@ export const configSchema = z.object({
   multiAgentGuidanceEnabled: z.boolean().optional(),
   // Invalid optional recovery config must not discard unrelated provider/account state.
   plaintextV2AgentMessages: z.boolean().optional().catch(undefined),
+  codexClaudeFastSubagentsOnly: z.boolean().optional().catch(undefined),
   agentTaskRecovery: agentTaskRecoverySchema.optional().catch(undefined),
   // Same rationale: a bad notify section must not cost the operator their providers.
   quotaResetNotify: quotaResetNotifySchema.optional().catch(undefined),

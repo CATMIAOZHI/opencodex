@@ -818,6 +818,8 @@ export interface OcxConfig {
    * Undefined = passthrough (don't modify what the client sends).
    */
   fastMode?: boolean;
+  /** Fork default true: Claude stays standard; its Codex Fast picker controls native GPT workers. */
+  codexClaudeFastSubagentsOnly?: boolean;
   /**
    * Windows/macOS SSE passthrough stream shape (#314 mitigation).
    * On Windows, "auto" (default) selects eager relay only on a runtime proven

@@ -1,4 +1,5 @@
 {
+  "codex-claude-fast.test.ts": "responses",
   "usage-cost-extended-cache.test.ts": "usage",
   "codex-catalog-deepseek-profile.test.ts": "codex-integration",
   "codex-catalog-global-direct-v2.test.ts": "codex-integration",

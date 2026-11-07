@@ -1,4 +1,5 @@
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { captureCodexClaudeFastControl } from "./codex-claude-fast";
 import { inputAdmissionRefusalMessage } from "./input-admission";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
@@ -250,6 +251,7 @@ export async function prepareResponsesRequest(
     }
     return decodeRequestErrorResponse(err, "responses");
   }
+  const codexFastControl = captureCodexClaudeFastControl(req, body, config, options);
   // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
   const originalSelector = options.mainHardLockFallbackOverride?.sourceModel ?? options.compactionRoutingOverride?.sourceModel
     ?? (options.comboAttempt || options.policyFallbackCandidate || options.internalDecisionCall || options.memoryModelPhase
@@ -1448,6 +1450,8 @@ export async function prepareResponsesRequest(
   // Final guard before normalization may inject guidance into the raw body.
   leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
   await applyFinalRouteRequestNormalization({
+    codexFastControl: codexFastControl && (logCtx.shadowCallRewrittenFrom || parsed._memoryModelPhase || parsed._compactionRequest)
+      ? { ...codexFastControl, publish: false } : codexFastControl,
     parsed,
     route,
     config,
