@@ -42,7 +42,7 @@ export function stainlessArchName(arch: string = process.arch): string {
   return arch ? `other:${arch}` : "unknown";
 }
 
-// ── Claude Code CLI (matches Claude Code 2.1.280 / @anthropic-ai/sdk 0.112.1) ──
+// ── Claude Code CLI (2.1.290 identity; SDK/runtime headers remain pinned separately) ──
 export const CLAUDE_CODE_HEADERS: Record<string, string> = {
   "X-App": "cli",
   "anthropic-dangerous-direct-browser-access": "true",

@@ -837,8 +837,9 @@ injection.
 
 #### Claude Fast in this fork
 
-`codexClaudeFastSubagentsOnly` defaults to `true`. Keep the Anthropic provider's
-`fastEnabled: true` to retain Claude's Fast button in Codex. For identified Codex Responses
+`codexClaudeFastSubagentsOnly` defaults to `true`. Claude's Fast button remains available
+in Codex even when the Anthropic provider has `fastEnabled: false`; it controls GPT
+subagents and does not grant Claude Fast capability. For identified Codex Responses
 requests, Claude always uses standard speed. With the button on, native ChatGPT GPT subagents
 in that conversation request priority; with it off, those workers request standard speed.
 Reasoning effort is unchanged. This per-conversation rule takes precedence over global `fastMode`;

@@ -414,7 +414,7 @@
       "tier": 3,
       "title": "Codex Claude Fast Control",
       "scope": "Fork-local Claude standard-speed requests with per-conversation native GPT worker Fast control.",
-      "documents": ["src/config/", "src/types/", "src/server/"]
+      "documents": ["src/config/", "src/types/", "src/server/", "src/codex/catalog/claude-fast-control.ts"]
     },
     {
       "path": "transports/responses-wire-shapes.md",

@@ -1,4 +1,5 @@
 import { websocketsEnabled } from "../config";
+import { applyClaudeFastControl } from "../codex/catalog/claude-fast-control";
 import { omitDisabledNativeCatalogEntries } from "../codex/catalog/native-omission";
 import type { OcxConfig } from "../types";
 import { buildCatalogEntries } from "../codex/catalog/build-entries";
@@ -43,5 +44,6 @@ export function buildCodexModelList({
     accountNativeSlugsBySelector, config.keepNativeChatGptOnV1 === true, config.modelPickerOrder,
     nativeSource,
   );
+  applyClaudeFastControl(entries, config, goOrdered, exactComboSlugs);
   return { models: omitDisabledNativeCatalogEntries(applyNativeVisibility(entries, disabledModels, accountSelectors.length > 0, new Set(accountNativeSlugs)), config) };
 }

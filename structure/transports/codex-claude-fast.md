@@ -2,8 +2,12 @@
 
 The local fork defaults `codexClaudeFastSubagentsOnly` to enabled. Its optional boolean is
 declared in `src/types/config.ts` and `src/config/schema/config-schema.ts`; explicit false restores
-upstream behavior. Catalog capability is unchanged, so an enabled Anthropic provider retains
-its Codex Fast picker.
+upstream behavior. `src/codex/catalog/claude-fast-control.ts` adds a display-only Fast control
+after normalization in live discovery, retained sync and convergence, including when provider
+`fastEnabled` is false. Provider capabilities and wire policy are unchanged. The overlay
+records its additions and removes only those when disabled or no longer applicable;
+other speed tiers remain visible to normal policy revocation. Combo rows and
+non-Anthropic routes are excluded.
 
 `src/server/responses/codex-claude-fast.ts` captures the original Codex Responses UI intent
 before route selection and normalization. Identified Claude requests using the Anthropic

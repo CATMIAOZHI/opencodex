@@ -1,5 +1,6 @@
 import { projectAntigravitySelectedModels } from "../providers/antigravity-effort-families";
 import { configuredUltraFastSlugs, retainedFlexPolicyBySlug } from "./catalog/configured-tiers";
+import { applyClaudeFastControl } from "./catalog/claude-fast-control";
 import { join } from "node:path";
 import { compareCatalogHealPaths } from "./catalog/heal-observation";
 
@@ -426,6 +427,7 @@ function prepareCatalog(
   );
   finalizeAutoReviewModelOverride(mergedModels, catalogModels, config);
   advanceNativeInheritanceTemplate(catalog, mergedModels, shouldUpgradeToUpstreamEntry);
+  applyClaudeFastControl(mergedModels, config, ordered, exactComboSlugs);
   // The second writer of this file. A dashboard model toggle, a combo edit, or a Codex account
   // login reaches `convergeCodexCatalog` and commits through `fixedCommit`, never through
   // `writeRetainedCatalogSync`, so the #4730 uniqueness guard has to stand here too or the same

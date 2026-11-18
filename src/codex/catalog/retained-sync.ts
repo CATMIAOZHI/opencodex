@@ -1,5 +1,6 @@
 import { projectAntigravitySelectedModels } from "../../providers/antigravity-effort-families";
 import { configuredUltraFastSlugs, retainedFlexPolicyBySlug } from "./configured-tiers";
+import { applyClaudeFastControl } from "./claude-fast-control";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { initializeConfigOwnership } from "../../lib/config-ownership";
@@ -559,6 +560,7 @@ function writeRetainedCatalogSync({
   clampCatalogModelsToCodexSupport(catalog.models, { observedCatalog: bundledCodexCatalogSnapshot() });
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
   advanceNativeInheritanceTemplate(catalog, catalog.models, shouldUpgradeToUpstreamEntry);
+  applyClaudeFastControl(catalog.models, config, orderedGoModels, exactComboSlugs);
   // Last mutation before serialization; see `enforceCatalogSlugUniqueness` for why the ordering
   // against the effort clamp is load-bearing rather than cosmetic.
   catalog.models = enforceCatalogSlugUniqueness(omitDisabledNativeCatalogEntries(catalog.models, config), true);

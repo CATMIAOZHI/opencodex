@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { applyCatalogModelMetadata } from "../../src/codex/catalog/effort";
+import { applyClaudeFastControl } from "../../src/codex/catalog/claude-fast-control";
+import { buildCodexModelList } from "../../src/server/codex-model-list";
 import type { RawEntry } from "../../src/codex/catalog/parsing";
 import { enrichProviderFromRegistry } from "../../src/providers/derive";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers-destination";
@@ -245,4 +247,71 @@ test("Responses ingress captures root intent before dropping the Claude outbound
   } finally {
     release();
   }
+});
+
+test("live catalog keeps the Claude control with provider Fast disabled without changing wire policy", async () => {
+  const provider = { ...claude, fastEnabled: false };
+  const cfg = { ...config, providers: { ...config.providers, "anthropic-apikey": provider } };
+  const models = ["claude-opus-5-5", "claude-fable-5-2"].map(id => ({
+    id, provider: "anthropic-apikey",
+    supportsServiceTier: serviceTierSupportForModel(provider, id, "anthropic-apikey"),
+  }));
+  const before = structuredClone(cfg);
+  const { models: rows } = buildCodexModelList({
+    config: cfg, nativeSlugs: [], availableAccountNativeSlugs: [], accountNativeSlugs: [],
+    accountNativeSlugsBySelector: new Map(), goOrdered: models, exactComboSlugs: new Set(),
+    accountSelectors: [], suppressedBareNativeSlugs: new Set(), disabledModels: new Set(),
+  });
+  for (const model of models) {
+    expect(model.supportsServiceTier).toBe(false);
+    const row = rows.find(row => row.slug === `anthropic-apikey/${model.id}`)!;
+    expect(row.additional_speed_tiers).toEqual(["fast"]);
+    expect(row.service_tiers).toContainEqual(expect.objectContaining({ id: "priority" }));
+  }
+  expect(cfg).toEqual(before);
+  for (const enabled of [true, false]) {
+    const body = { model: "anthropic-apikey/claude-opus-5-5", input: "hi", service_tier: enabled ? "priority" : "default" };
+    const req = request();
+    const control = captureCodexClaudeFastControl(req, body, cfg)!;
+    expect(codexClaudeFastMode(cfg, control, provider, "claude-opus-5-5")).toBe(false);
+    expect(worker(!enabled, "session", "caller", Date.now())).toBe(enabled);
+  }
+});
+
+test("retained picker overlay is idempotent and reversible; respects aliases, adapters and combo ownership", () => {
+  const cfg = { ...config, providers: {
+    ...config.providers,
+    "anthropic-apikey": { ...claude, fastEnabled: false, alias: "claude-provider",
+      modelAliases: { "claude-opus-5-5": "my-opus" },
+      modelAdapters: { "claude-chat": "openai-chat" as const } },
+  } };
+  const rows: RawEntry[] = [
+    { slug: "claude-provider/my-opus" },
+    { slug: "anthropic-apikey/claude-chat" },
+    { slug: "openai/gpt-6-astra", additional_speed_tiers: ["fast"] },
+    { slug: "anthropic-apikey/claude-combo", opencodex_routed_origin: "combo-v1" },
+    { slug: "anthropic-apikey/claude-owned-by-combo" },
+  ];
+  const before = structuredClone(rows);
+  const combos = new Set(["anthropic-apikey/claude-owned-by-combo"]);
+  applyClaudeFastControl(rows, cfg, [], combos);
+  expect(rows[0].additional_speed_tiers).toEqual(["fast"]);
+  expect(rows.slice(1)).toEqual(before.slice(1));
+  const once = structuredClone(rows);
+  applyClaudeFastControl(rows, cfg, [], combos);
+  expect(rows).toEqual(once);
+  applyClaudeFastControl(rows, { ...cfg, codexClaudeFastSubagentsOnly: false }, [], combos);
+  expect(rows).toEqual(before);
+  applyClaudeFastControl(rows, cfg, [], combos);
+  rows[0].service_tiers = [{ id: "new-policy" }];
+  applyClaudeFastControl(rows, { ...cfg, codexClaudeFastSubagentsOnly: false });
+  expect(rows[0].service_tiers).toEqual([{ id: "new-policy" }]);
+  const revoked: RawEntry[] = [{ slug: "claude-provider/my-opus",
+    service_tiers: [{ id: "flex" }], additional_speed_tiers: ["flex"] }];
+  applyClaudeFastControl(revoked, cfg);
+  revoked[0].service_tiers = revoked[0].service_tiers.filter((tier: { id: string }) => tier.id !== "flex");
+  revoked[0].additional_speed_tiers = ["fast"];
+  applyClaudeFastControl(revoked, { ...cfg, codexClaudeFastSubagentsOnly: false });
+  expect(revoked[0].service_tiers).toEqual([]);
+  expect(revoked[0].additional_speed_tiers).toEqual([]);
 });

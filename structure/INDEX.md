@@ -267,6 +267,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/auth-api/pool-mode-gate.ts` | [`providers/pool-credit-renewal.md`](providers/pool-credit-renewal.md) |
 | `src/codex/auth-context-provider.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/codex/auth-context.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md)<br>[`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) |
+| `src/codex/catalog/claude-fast-control.ts` | [`transports/codex-claude-fast.md`](transports/codex-claude-fast.md) |
 | `src/codex/catalog/effort.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/catalog/model-hints.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/ownership.ts` | [`catalog-routed-ownership.md`](catalog-routed-ownership.md) |

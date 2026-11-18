@@ -177,6 +177,7 @@ describe("client fingerprint — anthropic OAuth headers", () => {
     const apiKey = (await createAnthropicAdapter(apiKeyProvider).buildRequest(parsed())).headers;
     expect(oauth["Accept"]).toBe("application/json");
     expect(oauth["User-Agent"]).toBe(CLAUDE_CLI_USER_AGENT);
+    expect(oauth["User-Agent"]).toBe("claude-cli/2.1.290 (external, cli)");
     expect(apiKey["Accept"]).toBe("application/json");
     expect(apiKey["User-Agent"]).toBe(`@anthropic-ai/sdk/${CLAUDE_CLI_SDK_PACKAGE_VERSION}`);
   });

@@ -141,6 +141,9 @@ const CLAUDE_OPUS_46: Cost4 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite
 // (0.25) on Fable 5.1 — NOT the 0.1x (1.00) that Fable 5 and every other family use;
 // the pricing page footnote calls this out explicitly. Verified 2026-09-02.
 const CLAUDE_FABLE_51: Cost4 = { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 };
+// Claude Fable 5.2: official flat rates, verified 2026-11-10. The shared
+// 1h/5m write multiplier turns the $10 5m rate into $16 for 1h writes.
+const CLAUDE_FABLE_52: Cost4 = { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 };
 // Opus 5 was first priced from the maintainer's confirmation that it matched Opus 4.6. The
 // pricing page now lists it at that same 5 / 25 / 0.50 / 6.25 tuple (re-verified 2026-09-23).
 const CLAUDE_OPUS_5 = CLAUDE_OPUS_46;
@@ -324,6 +327,11 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // anthropic-apikey onto anthropic.
   { provider: "anthropic", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
   { provider: "anthropic-apikey", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
+  ...["anthropic", "anthropic-apikey"].map((provider): ExpectedPriceOverlay => ({
+    provider, modelId: "claude-fable-5-2", cost4: CLAUDE_FABLE_52,
+    source: `anthropic official Claude Fable 5.2 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`,
+    verifiedAt: "2026-11-10", status: "verified",
+  })),
   // Cursor canonicalizes every Fable 5.1 spelling onto this sole overlay row.
   { provider: "cursor", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input; vendor list price applied to the Cursor surface`, verifiedAt: "2026-09-02", status: "verified-derived" },
   // claude-opus-5 is exposed by three providers but absent from the jawcode bundle, so

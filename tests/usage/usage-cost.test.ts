@@ -325,6 +325,26 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("anthropic", "claude-fable-5")?.cost4.cacheRead).toBe(1);
   });
 
+  test("Fable 5.2 uses official prices on both Anthropic surfaces and account pools, including mixed cache TTLs", () => {
+    const expected = { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 };
+    for (const provider of ["anthropic", "anthropic-apikey", "anthropic-pb51d9b"]) {
+      const price = resolveMatchedPrice(provider, "claude-fable-5-2");
+      expect(price?.cost4).toEqual(expected);
+      const tokens = normalizeCostTokens({
+        inputTokens: 4_000_000, outputTokens: 1_000_000,
+        cacheReadInputTokens: 1_000_000,
+        cacheCreationInputTokens: 2_000_000, cacheCreation1hInputTokens: 1_000_000,
+      });
+      const cost = calculateCost(tokens!, price!.cost4);
+      expect(cost.input).toBe(8);
+      expect(cost.output).toBe(40);
+      expect(cost.cacheRead).toBe(0.2);
+      expect(cost.cacheWrite).toBe(26); // $10 5m + $16 1h
+      expect(cost.total).toBeCloseTo(74.2, 8);
+    }
+    expect(resolveMatchedPrice("anthropic", "claude-fable-5-1")?.cost4.input).toBe(10);
+  });
+
   test("17b. model-level fallback: openai provider gets gpt prices from the openai bundle", () => {
     const price = resolveMatchedPrice("openai", "gpt-5.5");
     expect(price).not.toBeNull();
