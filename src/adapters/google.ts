@@ -388,9 +388,17 @@ function messagesToGeminiFormat(
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
   const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(parsed.context.tools, parsed.options.toolChoice);
+  // Upstream #8792's wording compatibility, scoped to CCA so other providers
+  // retain their existing prompt prefixes. Rewrite only our generated guidance.
+  const compatibleToolCatalogNudge = isCloudCodeAssist
+    ? toolCatalogNudge?.replace(
+      "Names mentioned only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not additional top-level tools.",
+      "References to other functions in text do not add callable functions.",
+    )
+    : toolCatalogNudge;
   const identifiedSystemText = identifyRoutedModel([
     ...(parsed.context.systemPrompt ?? []),
-    ...(toolCatalogNudge ? [toolCatalogNudge] : []),
+    ...(compatibleToolCatalogNudge ? [compatibleToolCatalogNudge] : []),
     GOOGLE_BREVITY_INSTRUCTION,
   ].join("\n\n"), identityModelId);
   let systemText = isCloudCodeAssist

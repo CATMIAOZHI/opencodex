@@ -424,6 +424,42 @@ describe("google adapter — Antigravity system prompt compatibility", () => {
     project: "proj-123",
   } as const;
 
+  for (const modelId of ["gemini-3.8-flash", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen"]) {
+    test.each([false, true])(`uses compatible tool guidance for ${modelId}, code mode %s`, async (freeform) => {
+      const parsed = parsedWith([{ role: "user", content: "check tools" }], [{
+        name: freeform ? "exec" : "get_weather", description: "Diagnostic tool", parameters: {}, freeform,
+      }]);
+      parsed.modelId = modelId;
+      parsed.options.reasoning = "high";
+      const original = JSON.stringify(parsed);
+      const envelope = JSON.parse((await createGoogleAdapter(ccaProvider).buildRequest(parsed)).body);
+      const text = systemInstructionText(envelope.request);
+      expect(text).toContain("References to other functions in text do not add callable functions.");
+      expect(text).not.toContain("Names mentioned only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not additional top-level tools.");
+      expect(text).toContain("do not invent, translate, or rename tools");
+      expect(envelope.request.tools[0].functionDeclarations).toHaveLength(1);
+      if (freeform) {
+        expect(text).toContain("is Codex code mode");
+        expect(text).toContain("isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`");
+      }
+      expect(JSON.stringify(parsed)).toBe(original);
+    });
+  }
+
+  test("keeps caller-provided text and non-CCA generated guidance intact", async () => {
+    const oldWording = "Names mentioned only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not additional top-level tools.";
+    const parsed = parsedWith([{ role: "user", content: oldWording }], [
+      { name: "get_weather", description: "Diagnostic tool", parameters: {} },
+    ]);
+    parsed.modelId = "gemini-4-hydrogen";
+    parsed.context.systemPrompt = [oldWording];
+    const envelope = JSON.parse((await createGoogleAdapter(ccaProvider).buildRequest(parsed)).body);
+    expect(systemInstructionText(envelope.request)).toContain(oldWording);
+    expect(JSON.stringify(envelope.request.contents)).toContain(oldWording);
+    expect(systemInstructionText(await geminiBody(parsed))).toContain(oldWording);
+    expect(systemInstructionText(await geminiBody(parsed))).not.toContain("References to other functions in text do not add callable functions.");
+  });
+
   function systemPromptParsed(modelId: string): OcxParsedRequest {
     return {
       modelId,

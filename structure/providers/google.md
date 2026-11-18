@@ -4,6 +4,8 @@ Created: 2026-10-16 | Updated: 2026-11-13 | Version: 1.3 (Vertex model discovery
 
 ## Streaming input accounting
 
+For Antigravity/Cloud Code Assist, `src/adapters/google.ts` uses upstream #8792's concise tool-boundary wording in its generated catalog guidance. The earlier sentence enumerating instruction, description and helper references is associated with `429 RESOURCE_EXHAUSTED` on tool-bearing Gemini requests. Only generated guidance is rewritten; caller text and other providers' prompt prefixes are preserved. Declared tools, argument constraints, code-mode rules and genuine quota handling retain their existing behavior. `tests/adapters/google/google-adapter.test.ts` covers Flash and Gemini 4 ordinary/code-mode serialization and the caller/destination boundaries.
+
 Google-family SSE parsing counts new decoded text incrementally and waits for a newly received
 newline before splitting an incomplete line. Fragmentation therefore does not cause repeated
 UTF-8 encoding or rescanning of the growing prefix. The existing per-frame limit, terminal

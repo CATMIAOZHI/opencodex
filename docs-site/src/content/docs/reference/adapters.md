@@ -494,6 +494,9 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   is Google's — the proxy does not route around it.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
+- Antigravity's generated tool-catalog guidance uses the concise wording from upstream #8792
+  to avoid a prompt-triggered `429 RESOURCE_EXHAUSTED`. Tool names, argument constraints and
+  Codex code-mode helper rules retain their existing behavior. Genuine quota errors remain visible.
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
