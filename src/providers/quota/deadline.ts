@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../../types";
 import {
-  getProviderQuotaReportCache, isProviderQuotaReportCurrent, LAST_GOOD_MAX_AGE_MS,
+  getProviderQuotaReportCache, LAST_GOOD_MAX_AGE_MS, validateJoinedReports,
   providerQuotaCacheMatchesConfig, type ProviderQuotaProbeResult, type ProviderQuotaResponse,
 } from "./report-cache";
 
@@ -46,11 +46,10 @@ export async function boundProviderQuotaResponse(
   const cache = getProviderQuotaReportCache();
   const now = Date.now();
   const reports = cache && providerQuotaCacheMatchesConfig(cache.key, config) ? cache.response.reports : [];
-  return {
+  return validateJoinedReports({
     generatedAt: now,
     reports: reports.filter(report => live.has(report.provider)
       && report.aggregation === undefined
-      && (report.observed === true || now - report.updatedAt < LAST_GOOD_MAX_AGE_MS)
-      && isProviderQuotaReportCurrent(report)),
-  };
+      && (report.observed === true || now - report.updatedAt < LAST_GOOD_MAX_AGE_MS)),
+  }, config);
 }

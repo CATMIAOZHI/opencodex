@@ -32,7 +32,7 @@ describe("OpenCode Go strict Responses tool schemas", () => {
       parameters = { type: "object", properties: { child: parameters } };
     }
     const body = { tools: [{ type: "function", name: "deep", parameters }] };
-    const normalized = normalizeToolSchemas(body, false, true) as typeof body;
+    const normalized = normalizeToolSchemas(body, false, false, true) as typeof body;
     let original = parameters;
     let completed = normalized.tools[0]!.parameters;
     for (let depth = 0; depth < 12_000; depth++) {
@@ -42,7 +42,7 @@ describe("OpenCode Go strict Responses tool schemas", () => {
       completed = (completed.properties as Record<string, Record<string, unknown>>).child!;
     }
     expect(completed.required).toEqual([]);
-    expect(normalizeToolSchemas(normalized, false, true)).toBe(normalized);
+    expect(normalizeToolSchemas(normalized, false, false, true)).toBe(normalized);
   });
 
   test("registry capability reaches both saved-provider enrichment and routing", () => {

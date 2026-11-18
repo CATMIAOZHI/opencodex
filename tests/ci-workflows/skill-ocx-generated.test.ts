@@ -14,8 +14,9 @@ const GROUPS: Record<string, string[]> = {
   lifecycle: ["codex-provider", "chatgpt", "status", "resolve", "capabilities", "sync", "start", "stop", "restart", "service", "gui"],
   "providers-models": ["provider", "models", "alias"], accounts: ["account", "auth", "login", "logout"],
   "agents-routing": ["agent", "combo", "route", "fallback", "v2", "effort", "memory", "message", "advisor"], integrations: ["claude", "integration", "commandcode", "grok", "codex-shim"],
-  "observe-system": ["companion", "usage", "logs", "storage", "inspect", "system", "observe", "debug", "export", "import", "cost", "update", "config", "tray"],
-  "access-remote": ["link", "remote-workspace", "hub", "connect", "api", "access"], lab: ["lab"],
+  "observe-system": ["companion", "usage", "logs", "storage", "inspect", "system", "observe", "export", "import", "cost", "update", "config", "tray", "telemetry"],
+  debug: ["debug"],
+  "access-remote": ["link", "remote-workspace", "hub", "connect", "disconnect", "api", "access"], lab: ["lab"],
 };
 const FILENAMES = [INDEX, ...Object.keys(GROUPS).map(domain => `01_surface_${domain}.md`)];
 const SKILL_DIR = repoPath("skills", "ocx");
@@ -102,7 +103,7 @@ function renderFixture(root: string, mutation: string) {
 }
 
 describe("generated operating-skill chapter contract", () => {
-  test("exactly eight chapters own all declarations once, in original order", () => {
+  test("exactly nine chapters own all declarations once, in original order", () => {
     const files = renderManagementSurfaces();
     expect(Object.keys(files)).toEqual(FILENAMES);
     expect(renderManagementSurfaces()).toEqual(files);
@@ -166,7 +167,7 @@ describe("generated operating-skill chapter contract", () => {
             row.usage = "ocx " + row.command.join(" ") + " --unsafe-fixture";
         }
       `);
-      expect(result.status).toBe(0);
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
       expect(result.stdout).not.toContain("--unsafe-fixture");
     });
   });

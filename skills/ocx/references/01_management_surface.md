@@ -26,12 +26,13 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | Chapter | Declared capabilities |
 |---|---|
 | [lifecycle](01_surface_lifecycle.md) | 14 |
-| [providers-models](01_surface_providers-models.md) | 50 |
-| [accounts](01_surface_accounts.md) | 42 |
-| [agents-routing](01_surface_agents-routing.md) | 68 |
+| [providers-models](01_surface_providers-models.md) | 53 |
+| [accounts](01_surface_accounts.md) | 43 |
+| [agents-routing](01_surface_agents-routing.md) | 71 |
 | [integrations](01_surface_integrations.md) | 41 |
-| [observe-system](01_surface_observe-system.md) | 100 |
-| [access-remote](01_surface_access-remote.md) | 33 |
+| [observe-system](01_surface_observe-system.md) | 83 |
+| [debug](01_surface_debug.md) | 23 |
+| [access-remote](01_surface_access-remote.md) | 51 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -75,9 +76,17 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_access-remote.md#ocx-link-status)
 
+### `ocx link diagnostics`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-link-diagnostics)
+
 ### `ocx link revoke`
 
 [State-changing task](01_surface_access-remote.md#ocx-link-revoke)
+
+### `ocx link recover`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-recover)
 
 ### `ocx link reconnect`
 
@@ -527,6 +536,18 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_providers-models.md#ocx-alias-defaults)
 
+### `ocx alias template set`
+
+[State-changing task](01_surface_providers-models.md#ocx-alias-template-set)
+
+### `ocx alias template rm`
+
+[State-changing task](01_surface_providers-models.md#ocx-alias-template-rm)
+
+### `ocx alias template show`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-alias-template-show)
+
 ### `ocx provider pacing`
 
 [State-changing task](01_surface_providers-models.md#ocx-provider-pacing)
@@ -554,6 +575,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx models order reset`
 
 [State-changing task](01_surface_providers-models.md#ocx-models-order-reset)
+
+### `ocx account reset-affinity`
+
+[State-changing task](01_surface_accounts.md#ocx-account-reset-affinity)
 
 ### `ocx account preserve-signed-in`
 
@@ -1133,95 +1158,95 @@ Original invocation order. These headings preserve links to the previous single-
 
 ### `ocx debug requests`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-requests)
+[State-changing task](01_surface_debug.md#ocx-debug-requests)
 
 ### `ocx debug provider`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-provider)
+[State-changing task](01_surface_debug.md#ocx-debug-provider)
 
 ### `ocx debug provider status`
 
-[Read-oriented task](01_surface_observe-system.md#ocx-debug-provider-status)
+[Read-oriented task](01_surface_debug.md#ocx-debug-provider-status)
 
 ### `ocx debug provider on`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-provider-on)
+[State-changing task](01_surface_debug.md#ocx-debug-provider-on)
 
 ### `ocx debug provider off`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-provider-off)
+[State-changing task](01_surface_debug.md#ocx-debug-provider-off)
 
 ### `ocx debug provider reset`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-provider-reset)
+[State-changing task](01_surface_debug.md#ocx-debug-provider-reset)
 
 ### `ocx debug provider logs`
 
-[Read-oriented task](01_surface_observe-system.md#ocx-debug-provider-logs)
+[Read-oriented task](01_surface_debug.md#ocx-debug-provider-logs)
 
 ### `ocx debug usage`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-usage)
+[State-changing task](01_surface_debug.md#ocx-debug-usage)
 
 ### `ocx debug usage status`
 
-[Read-oriented task](01_surface_observe-system.md#ocx-debug-usage-status)
+[Read-oriented task](01_surface_debug.md#ocx-debug-usage-status)
 
 ### `ocx debug usage on`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-usage-on)
+[State-changing task](01_surface_debug.md#ocx-debug-usage-on)
 
 ### `ocx debug usage off`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-usage-off)
+[State-changing task](01_surface_debug.md#ocx-debug-usage-off)
 
 ### `ocx debug usage reset`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-usage-reset)
+[State-changing task](01_surface_debug.md#ocx-debug-usage-reset)
 
 ### `ocx debug usage logs`
 
-[Read-oriented task](01_surface_observe-system.md#ocx-debug-usage-logs)
+[Read-oriented task](01_surface_debug.md#ocx-debug-usage-logs)
 
 ### `ocx debug injection`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-injection)
+[State-changing task](01_surface_debug.md#ocx-debug-injection)
 
 ### `ocx debug injection status`
 
-[Read-oriented task](01_surface_observe-system.md#ocx-debug-injection-status)
+[Read-oriented task](01_surface_debug.md#ocx-debug-injection-status)
 
 ### `ocx debug injection on`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-injection-on)
+[State-changing task](01_surface_debug.md#ocx-debug-injection-on)
 
 ### `ocx debug injection off`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-injection-off)
+[State-changing task](01_surface_debug.md#ocx-debug-injection-off)
 
 ### `ocx debug injection reset`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-injection-reset)
+[State-changing task](01_surface_debug.md#ocx-debug-injection-reset)
 
 ### `ocx debug claude`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-claude)
+[State-changing task](01_surface_debug.md#ocx-debug-claude)
 
 ### `ocx debug claude status`
 
-[Read-oriented task](01_surface_observe-system.md#ocx-debug-claude-status)
+[Read-oriented task](01_surface_debug.md#ocx-debug-claude-status)
 
 ### `ocx debug claude on`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-claude-on)
+[State-changing task](01_surface_debug.md#ocx-debug-claude-on)
 
 ### `ocx debug claude off`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-claude-off)
+[State-changing task](01_surface_debug.md#ocx-debug-claude-off)
 
 ### `ocx debug claude reset`
 
-[State-changing task](01_surface_observe-system.md#ocx-debug-claude-reset)
+[State-changing task](01_surface_debug.md#ocx-debug-claude-reset)
 
 ### `ocx system status`
 
@@ -1371,6 +1396,34 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_observe-system.md#ocx-companion-timeline)
 
+### `ocx telemetry status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-telemetry-status)
+
+### `ocx telemetry enable`
+
+[State-changing task](01_surface_observe-system.md#ocx-telemetry-enable)
+
+### `ocx telemetry disable`
+
+[State-changing task](01_surface_observe-system.md#ocx-telemetry-disable)
+
+### `ocx telemetry profile status`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-telemetry-profile-status)
+
+### `ocx telemetry profile connect`
+
+[State-changing task](01_surface_observe-system.md#ocx-telemetry-profile-connect)
+
+### `ocx telemetry profile disconnect`
+
+[State-changing task](01_surface_observe-system.md#ocx-telemetry-profile-disconnect)
+
+### `ocx disconnect`
+
+[State-changing task](01_surface_access-remote.md#ocx-disconnect)
+
 ### `ocx hub disable`
 
 [State-changing task](01_surface_access-remote.md#ocx-hub-disable)
@@ -1438,6 +1491,66 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx access audio live-check`
 
 [State-changing task](01_surface_access-remote.md#ocx-access-audio-live-check)
+
+### `ocx link check`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-check)
+
+### `ocx link update`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-update)
+
+### `ocx link sync`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-sync)
+
+### `ocx link restart-codex`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-restart-codex)
+
+### `ocx link capture start`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-capture-start)
+
+### `ocx link capture stop`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-capture-stop)
+
+### `ocx link capture status`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-capture-status)
+
+### `ocx link policy`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-policy)
+
+### `ocx link routes`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-link-routes)
+
+### `ocx link routes add`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-routes-add)
+
+### `ocx link routes remove`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-routes-remove)
+
+### `ocx link routes order`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-routes-order)
+
+### `ocx link operations`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-link-operations)
+
+### `ocx link operations resolve`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-operations-resolve)
+
+### `ocx link activity clear`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-activity-clear)
 
 ### `ocx lab status`
 
@@ -1523,8 +1636,20 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_lab.md#ocx-lab-run)
 
+### `ocx route to`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-to)
+
+### `ocx route to status`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-route-to-status)
+
+### `ocx route to sync`
+
+[State-changing task](01_surface_agents-routing.md#ocx-route-to-sync)
+
 ## Counts
 
-- declared capabilities: 369
-- of those, state-changing: 227
+- declared capabilities: 400
+- of those, state-changing: 251
 - head-resolved invocations: 2

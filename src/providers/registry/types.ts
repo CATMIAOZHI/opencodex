@@ -260,6 +260,12 @@ export interface ProviderRegistryEntry {
   supportsServiceTier?: boolean;
   /** Registry default for OpenAI extended hosted web_search field support. */
   supportsOpenAiWebSearchToolFields?: boolean;
+  /**
+   * Registry-only smallest image edge, in pixels, that the upstream accepts on the
+   * `openai-chat` wire. Inline images below it are upscaled before sending, because the
+   * upstream rejects the whole request otherwise (Venice: "images must be at least 64x64").
+   */
+  minImageEdge?: number;
   /** Registry default for native Responses custom-tool support. */
   supportsResponsesCustomTools?: boolean;
   /** Complete required arrays for function-like Responses tools. */

@@ -16,10 +16,8 @@ import { OCX_ELEVATED_STAGING_UNREADABLE, runWindowsElevatedScheduledTaskRegistr
 import { defaultWinswEntry, installWinswService, statusWinswRaw, uninstallWinswService, WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
 import { forgetEphemeralSecretDir, forgetEphemeralSecretPath, hardenElevatedStageDir, hardenElevatedStagePath, hardenSecretDir } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { writeServiceApiTokenFile } from "./guards";
-import type { ServiceStopOutcome } from "./orchestration";
 import { TASK, windowsLauncherVbsPath, windowsTaskXmlPath, serviceStatePath, writeServiceInstallState, serviceSourceDir, cliEntry } from "./state";
 import { decodeSchtasksOutput, querySchtasks, schtasks, type WindowsSchedulerTaskProbe, schtasksErrorDetail, probeWindowsSchedulerTask, rollbackWindowsSchedulerTaskOwnedByAttempt } from "./windows-scheduler";
 import { buildWindowsServiceScript, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsLauncherVbs, resolvedWindowsTaskSid, buildWindowsTaskXmlDocument, windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy } from "./windows-taskxml";
@@ -64,7 +62,7 @@ export function winswListenPort(deps: { readXml?: () => string } = {}): number |
  * regress a user who has no credential to protect.
  */
 export interface ServiceDefinitionWriteDeps {
-  writeFile?: (path: string, content: string, options: { encoding: "utf8" | "utf16le"; mode: number; flag: "wx" }) => void;
+  writeFile?: (path: string, content: string | Buffer, options: { encoding?: "utf8" | "utf16le"; mode: number; flag: "wx" }) => void;
   chmod?: (path: string, mode: number) => void;
   harden?: (path: string, options: { required: boolean }) => void;
   rename?: (source: string, destination: string) => void;
@@ -76,7 +74,7 @@ export interface ServiceDefinitionWriteDeps {
 
 export function writeServiceDefinitionFile(
   path: string,
-  content: string,
+  content: string | Buffer,
   encoding: "utf8" | "utf16le",
   deps: ServiceDefinitionWriteDeps = {},
 ): void {
@@ -91,9 +89,10 @@ export function writeServiceDefinitionFile(
   const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${uuid()}.tmp`);
 
   try {
-    writeFile(temporary, content, { encoding, mode: 0o600, flag: "wx" });
+    if (typeof content === "string") writeFile(temporary, content, { encoding, mode: 0o600, flag: "wx" });
+    else writeFile(temporary, content, { mode: 0o600, flag: "wx" });
     try { chmod(temporary, 0o600); } catch { /* superseded by the Windows ACL below */ }
-    if (platform === "win32") harden(temporary, { required: definitionCarriesCredential(content) });
+    if (platform === "win32") harden(temporary, { required: definitionCarriesCredential(typeof content === "string" ? content : content.toString(encoding)) });
     rename(temporary, path);
   } catch (error) {
     let cleanupError: unknown;
@@ -157,6 +156,38 @@ export function writeWindowsSchedulerAssets(runtime: DurableBunRuntime = durable
     buildWindowsTaskXmlDocument(script, windowsLauncherVbsPath()),
     "utf16le",
   );
+}
+
+/**
+ * The on-disk scheduler assets as they are now, so a failed rewrite can put back what the
+ * registered task already runs. The returned restore rewrites only assets whose bytes changed
+ * (one that failed to write is still intact) and removes one that did not exist before.
+ */
+export function snapshotWindowsSchedulerAssets(): () => void {
+  const assets = [
+    { path: windowsServiceScriptPath(), encoding: "utf8" as const },
+    { path: windowsLauncherVbsPath(), encoding: "utf16le" as const },
+    { path: windowsTaskXmlPath(), encoding: "utf16le" as const },
+  ].map(asset => {
+    try { return { ...asset, bytes: readFileSync(asset.path) as Buffer | null }; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...asset, bytes: null };
+      throw error;
+    }
+  });
+  return () => {
+    for (const asset of assets) {
+      let current: Buffer | null;
+      try { current = readFileSync(asset.path); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        current = null;
+      }
+      if (asset.bytes === null) { if (current !== null) unlinkSync(asset.path); continue; }
+      if (current !== null && current.equals(asset.bytes)) continue;
+      writeServiceDefinitionFile(asset.path, asset.bytes, asset.encoding);
+    }
+  };
 }
 
 const WINDOWS_SCHEDULER_STAGE_PREFIX = "opencodex-service-stage-";
@@ -885,41 +916,9 @@ export function stopWindows(beforeMutation?: () => void): void {
   }
 }
 
-/**
- * `stopWindows` for callers that need to know whether it worked.
- *
- * The void form swallows a non-benign `/end` failure, which is right for best-effort
- * teardown and wrong for deciding whether an update may replace files: a scheduler that
- * refused to stop can respawn the proxy on top of a half-written install (#3008).
- */
-export function stopWindowsChecked(): boolean {
-  try {
-    schtasks(["/end", "/tn", TASK]);
-    return true;
-  } catch (error) {
-    return isWindowsSchedulerEndBenign(error);
-  }
-}
-
 export function statusWindows(): string { try { return schtasks(["/query", "/tn", TASK]); } catch { return ""; } }
 
 export function statusWindowsXml(): string { try { return schtasks(["/query", "/tn", TASK, "/xml"]); } catch { return ""; } }
-
-/**
- * Best-effort termination of surviving Windows scheduler launcher/wrapper processes.
- * `schtasks /end` ends the task instance but often leaves wscript/cmd running the
- * `:loop` batch, which brings the proxy back during a stop or restart.
- *
- * The matching rule — canonical paths of THIS installation, as complete
- * command-line tokens — lives in lib/windows-service-wrappers so the update job
- * cannot drift away from it again.
- */
-export function killWindowsServiceWrapperProcesses(): void {
-  killWindowsSchedulerWrappers({
-    scriptPath: windowsServiceScriptPath(),
-    launcherPath: windowsLauncherVbsPath(),
-  });
-}
 
 export function uninstallWindows(): void {
   const probe = probeWindowsSchedulerTask(TASK);
@@ -942,23 +941,4 @@ export function uninstallWindows(): void {
   if (existsSync(windowsServiceScriptPath())) unlinkSync(windowsServiceScriptPath());
   if (existsSync(windowsLauncherVbsPath())) unlinkSync(windowsLauncherVbsPath());
   if (existsSync(windowsTaskXmlPath())) unlinkSync(windowsTaskXmlPath());
-}
-
-/**
- * Collapse the Windows backend observations into one outcome.
- *
- * Extracted so the precedence is testable by calling it. The rule that matters: a readable
- * failure outranks an unreadable state, and an unreadable state outranks success — a
- * scheduler we cannot see may still respawn the proxy.
- */
-export function classifyWindowsServiceStop(o: {
-  stopped: boolean;
-  failed: boolean;
-  schedulerStopped: boolean;
-  stateUnknown: boolean;
-}): ServiceStopOutcome {
-  if (o.failed) return "failed";
-  if (o.stateUnknown) return "state-unknown";
-  if (o.stopped) return o.schedulerStopped ? "stopped-respawnable" : "stopped";
-  return "absent";
 }

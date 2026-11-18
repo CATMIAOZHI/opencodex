@@ -13,7 +13,7 @@ import {
   setProviderQuotaResponseDeadlineForTests,
 } from "../../src/providers/quota";
 import {
-  accountReportCurrent, getProviderQuotaReportCache, LAST_GOOD_MAX_AGE_MS, setProviderQuotaReportCache,
+  accountReportCurrent, captureReportOwner, getProviderQuotaReportCache, LAST_GOOD_MAX_AGE_MS, setProviderQuotaReportCache,
 } from "../../src/providers/quota/report-cache";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -121,5 +121,16 @@ describe("bounded provider quota fan-out", () => {
       response: { generatedAt: Date.now(), reports: [live] },
     });
     expect((await fetchProviderQuotaReportsBounded(config, true)).reports).toEqual([]);
+    const foreignOwner = { ...live };
+    captureReportOwner(live.provider, {
+      ...config.providers[live.provider]!,
+      baseUrl: "https://other.example.invalid/v1",
+    })(foreignOwner);
+    setProviderQuotaReportCache({
+      key: cacheKey, ts: Date.now(),
+      response: { generatedAt: Date.now(), reports: [live, foreignOwner, { ...live }] },
+    });
+    // A matching cache discriminator alone cannot authorize a report or its owner.
+    expect((await fetchProviderQuotaReportsBounded(config, true)).reports).toEqual([live]);
   });
 });
