@@ -46,6 +46,7 @@ import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRete
 import { isPlainObject } from "./internal";
 import { usageFromResponsesPayload } from "./usage";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
+import { normalizeNativeSolWebSchema } from "./native-web-schema";
 import { annotateEmptyResponsesToolOutputs, backfillWebSearchQueries, normalizeResponsesToolResultAdjacency, repairOrphanedInputItems, repairOversizedReplayCallIds, repairUnidentifiedToolOutputItems, restoreBridgedWebSearchCalls } from "./tool-output-recovery";
 import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-cache";
 import { tagHistoricalInputItems } from "../../responses/item-provenance";
@@ -487,6 +488,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         finalBody = { ...finalBody, stream: true };
       }
       if (isCanonicalOpenAiForwardProvider(provider)) {
+        finalBody = normalizeNativeSolWebSchema(finalBody);
         const override = (provider as { _codexAccountOverride?: { chatgptAccountId: string; kind?: string } })._codexAccountOverride;
         if (override && override.kind !== "main-pool") {
           finalBody = isolateCodexPoolClientMetadata(finalBody, override.chatgptAccountId);
